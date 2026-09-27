@@ -27,12 +27,6 @@
 
 ## 中文
 
-### 🎬 演示视频
-
-https://github.com/user-attachments/assets/eb240652-c6dc-468d-819e-b42f0a296140
-
-高清版：[YouTube](https://youtu.be/GykF2aWjmv4)
-
 ### ✨ 功能特性
 
 - **🍎 AirPlay 支持**：完美支持 iPhone、iPad、Mac 投屏
@@ -210,12 +204,6 @@ cd MiracastReceiver
 ---
 
 ## English
-
-### 🎬 Demo Video
-
-https://github.com/user-attachments/assets/eb240652-c6dc-468d-819e-b42f0a296140
-
-HD version: [YouTube](https://youtu.be/GykF2aWjmv4)
 
 ### ✨ Features
 

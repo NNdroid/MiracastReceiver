@@ -7,181 +7,40 @@
   <meta name="theme-color" content="#08111f">
   <title>MiracastReceiver Control Center</title>
   <link rel="stylesheet" href="/styles.css">
-  <link rel="stylesheet" href="/theme.css">
+  <style>
+    :root{color-scheme:dark light}
+    @media (prefers-color-scheme:light){
+      :root{color:#142338;background:#f3f7fc;--bg:#f3f7fc;--bg-2:#eaf1f9;--panel:rgba(255,255,255,.92);--panel-strong:#fff;--panel-soft:#f5f8fc;--line:rgba(41,73,112,.14);--line-strong:rgba(41,73,112,.26);--text:#142338;--muted:#536982;--muted-2:#7b8da2;--cyan:#087aa6;--green:#087f5b;--violet:#6750a4;--amber:#a86100;--danger:#c93848;--accent:#246bce;--accent-2:#6558c8;--shadow:0 20px 55px rgba(41,67,99,.12)}
+      html{background:var(--bg)}
+      body{background:radial-gradient(circle at 18% 0%,rgba(71,142,238,.12),transparent 31%),radial-gradient(circle at 92% 90%,rgba(106,91,206,.08),transparent 34%),linear-gradient(145deg,#f8fbff 0%,#f1f6fc 48%,#eaf1f9 100%)}
+      .ambient{opacity:.08}.sidebar{background:rgba(249,252,255,.9)}.topbar{background:rgba(248,251,255,.82)}
+      .panel,.metric-card{background:linear-gradient(180deg,rgba(255,255,255,.96),rgba(246,249,253,.94));box-shadow:var(--shadow)}
+      .hero{background:radial-gradient(circle at 80% 20%,rgba(64,132,230,.12),transparent 38%),linear-gradient(135deg,rgba(255,255,255,.98),rgba(237,244,252,.96))}
+      .hero-address{background:rgba(239,245,252,.86);border-color:rgba(58,91,132,.14)}.hero-address strong{color:#18314f}.hero-address small{color:#6c8097}.hero-kicker{color:#416b9e}
+      .soft-pill{background:rgba(36,107,206,.055);border-color:rgba(36,107,206,.13);color:#486581}.sidebar-footer{background:rgba(239,245,252,.82)}.sidebar-footer strong{color:#29445f}
+      .nav:hover{background:rgba(36,107,206,.07);color:#24476b}.nav.active{background:linear-gradient(90deg,rgba(36,107,206,.12),rgba(101,88,200,.06));color:#183d68}.nav-icon{background:rgba(36,107,206,.06);color:#426e9f}
+      button{background:rgba(245,248,252,.94);color:var(--text)}button:hover{background:#eaf1f9}.ghost{background:rgba(36,107,206,.04)!important}
+      .badge{background:rgba(64,87,116,.06)}.badge.ok{color:#086b4e;background:rgba(8,127,91,.08)}.badge.bad{color:#b32e3d;background:rgba(201,56,72,.08)}
+      .switch-row{background:rgba(248,250,253,.94);border-color:rgba(54,83,119,.13)}.switch-row:hover{background:#f0f5fb;border-color:rgba(36,107,206,.22)}.switch-row i{background:#c9d4e1}.switch-row i:after{background:#fff;box-shadow:0 1px 4px rgba(30,50,75,.2)}
+      input,select{background:#fff;color:var(--text);border-color:rgba(48,78,114,.18)}input[readonly]{color:#61758b;background:#eef3f8}.status-list>div{border-color:rgba(48,78,114,.09)}
+      pre{background:#eef3f8!important;color:#29425e!important;border-color:rgba(48,78,114,.12)!important}.modal{background:rgba(223,231,241,.72)}.modal-card{background:#fff!important;border-color:rgba(48,78,114,.16)!important;box-shadow:0 30px 90px rgba(45,66,92,.18)!important}
+    }
+  </style>
 </head>
 <body>
-  <div class="ambient ambient-a"></div>
-  <div class="ambient ambient-b"></div>
-
-  <div id="login" class="modal hidden">
-    <div class="modal-card login-card">
-      <div class="brand-mark large">MR</div>
-      <p class="eyebrow">SECURE LOCAL ACCESS</p>
-      <h2>连接电视管理中心</h2>
-      <p>直接扫描电视首页二维码可免输入。手动访问时请输入电视上显示的 WebUI Token。</p>
-      <label class="field-label">WebUI Token</label>
-      <input id="tokenInput" type="password" autocomplete="off" placeholder="输入 Token">
-      <button id="loginBtn" class="primary wide">连接到电视</button>
-      <div id="loginError" class="error-text"></div>
-    </div>
-  </div>
-
-  <div class="app-shell">
-    <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-mark">MR</div>
-        <div>
-          <strong>MiracastReceiver</strong>
-          <span>Control Center</span>
-        </div>
-      </div>
-
-      <nav>
-        <button class="nav active" data-page="overview"><span class="nav-icon">⌂</span><span>概览</span></button>
-        <button class="nav" data-page="protocols"><span class="nav-icon">⌁</span><span>协议与发现</span></button>
-        <button class="nav" data-page="playback"><span class="nav-icon">▶</span><span>播放器</span></button>
-        <button class="nav" data-page="system"><span class="nav-icon">⚙</span><span>系统与后台</span></button>
-        <button class="nav" data-page="logs"><span class="nav-icon">≡</span><span>实时日志</span></button>
-      </nav>
-
-      <div class="sidebar-footer">
-        <span class="sidebar-label">局域网连接</span>
-        <strong id="sidebarAddress">等待网络</strong>
-        <span>Token 鉴权 · 本地管理</span>
-      </div>
-    </aside>
-
-    <div class="workspace">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">ANDROID TV RECEIVER</p>
-          <h1 id="pageTitle">接收中心概览</h1>
-        </div>
-        <div class="header-actions">
-          <span id="connectionBadge" class="badge"><i></i>连接中</span>
-          <button id="copyAddressBtn" class="ghost">复制地址</button>
-          <button id="restartBtn" class="primary subtle">重载接收服务</button>
-        </div>
-      </header>
-
+  <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
+  <div id="login" class="modal hidden"><div class="modal-card login-card"><div class="brand-mark large">MR</div><p class="eyebrow">SECURE LOCAL ACCESS</p><h2>连接电视管理中心</h2><p>直接扫描电视首页二维码可免输入。手动访问时请输入电视上显示的 WebUI Token。</p><label class="field-label">WebUI Token</label><input id="tokenInput" type="password" autocomplete="off" placeholder="输入 Token"><button id="loginBtn" class="primary wide">连接到电视</button><div id="loginError" class="error-text"></div></div></div>
+  <div class="app-shell"><aside class="sidebar"><div class="brand"><div class="brand-mark">MR</div><div><strong>MiracastReceiver</strong><span>Control Center</span></div></div><nav><button class="nav active" data-page="overview"><span class="nav-icon">⌂</span><span>概览</span></button><button class="nav" data-page="protocols"><span class="nav-icon">⌁</span><span>协议与发现</span></button><button class="nav" data-page="playback"><span class="nav-icon">▶</span><span>播放器</span></button><button class="nav" data-page="system"><span class="nav-icon">⚙</span><span>系统与后台</span></button><button class="nav" data-page="logs"><span class="nav-icon">≡</span><span>实时日志</span></button></nav><div class="sidebar-footer"><span class="sidebar-label">局域网连接</span><strong id="sidebarAddress">等待网络</strong><span>Token 鉴权 · 本地管理</span></div></aside>
+    <div class="workspace"><header class="topbar"><div><p class="eyebrow">ANDROID TV RECEIVER</p><h1 id="pageTitle">接收中心概览</h1></div><div class="header-actions"><span id="connectionBadge" class="badge"><i></i>连接中</span><button id="copyAddressBtn" class="ghost">复制地址</button><button id="restartBtn" class="primary subtle">重载接收服务</button></div></header>
       <main>
-        <section id="page-overview" class="page active">
-          <article class="hero panel">
-            <div class="hero-copy">
-              <span class="hero-kicker">READY TO CAST</span>
-              <h2 id="deviceName">Android TV</h2>
-              <p id="deviceMeta">正在读取设备信息…</p>
-              <div class="hero-tags">
-                <span id="serviceState" class="soft-pill">接收服务</span>
-                <span id="playbackState" class="soft-pill">IDLE</span>
-                <span id="portMode" class="soft-pill">WebUI 端口</span>
-              </div>
-            </div>
-            <div class="hero-address">
-              <span>管理地址</span>
-              <strong id="webAddress">-</strong>
-              <small id="serviceUptime">运行时间 -</small>
-            </div>
-          </article>
-
-          <div class="metric-grid">
-            <article class="metric-card"><div class="metric-icon cyan">IP</div><div><span>电视地址</span><strong id="deviceIp">-</strong><small>LAN IPv4</small></div></article>
-            <article class="metric-card"><div class="metric-icon green">▶</div><div><span>当前播放</span><strong id="playbackTitle">当前没有播放</strong><small>实时同步播放器状态</small></div></article>
-            <article class="metric-card"><div class="metric-icon violet">A</div><div><span>AirPlay</span><strong id="airplayState">-</strong><small>Apple 设备镜像/媒体</small></div></article>
-            <article class="metric-card"><div class="metric-icon amber">M</div><div><span>Miracast</span><strong id="miracastState">-</strong><small>Windows / Android WFD</small></div></article>
-          </div>
-
-          <div class="grid two overview-grid">
-            <article class="panel">
-              <div class="panel-title"><div><p class="eyebrow">RECEIVER</p><h2>协议健康状态</h2></div><span class="section-dot"></span></div>
-              <div class="status-list premium-list">
-                <div><span>DLNA / UPnP</span><b id="dlnaState">配置中</b></div>
-                <div><span>硬件解码</span><b id="decoderState">-</b></div>
-                <div><span>WebUI 实际端口</span><b id="runtimePort">-</b></div>
-                <div><span>最近错误</span><b id="lastError">无</b></div>
-              </div>
-            </article>
-            <article class="panel">
-              <div class="panel-title"><div><p class="eyebrow">SYSTEM ACCESS</p><h2>特权与后台能力</h2></div><span class="section-dot violet-dot"></span></div>
-              <div class="status-list premium-list">
-                <div><span>Magisk / Root</span><b id="rootState">-</b></div>
-                <div><span>Shizuku</span><b id="shizukuState">-</b></div>
-                <div><span>开机兜底</span><b id="bootState">-</b></div>
-                <div><span>扫码访问</span><b>电视首页二维码直达</b></div>
-              </div>
-            </article>
-          </div>
+        <section id="page-overview" class="page active"><article class="hero panel"><div class="hero-copy"><span class="hero-kicker">READY TO CAST</span><h2 id="deviceName">Android TV</h2><p id="deviceMeta">正在读取设备信息…</p><div class="hero-tags"><span id="serviceState" class="soft-pill">接收服务</span><span id="playbackState" class="soft-pill">IDLE</span><span id="portMode" class="soft-pill">WebUI 端口</span></div></div><div class="hero-address"><span>管理地址</span><strong id="webAddress">-</strong><small id="serviceUptime">运行时间 -</small></div></article>
+          <div class="metric-grid"><article class="metric-card"><div class="metric-icon cyan">IP</div><div><span>电视地址</span><strong id="deviceIp">-</strong><small>LAN IPv4</small></div></article><article class="metric-card"><div class="metric-icon green">▶</div><div><span>当前播放</span><strong id="playbackTitle">当前没有播放</strong><small>实时同步播放器状态</small></div></article><article class="metric-card"><div class="metric-icon violet">A</div><div><span>AirPlay</span><strong id="airplayState">-</strong><small>Apple 设备镜像/媒体</small></div></article><article class="metric-card"><div class="metric-icon amber">M</div><div><span>Miracast</span><strong id="miracastState">-</strong><small>Windows / Android WFD</small></div></article></div>
+          <div class="grid two overview-grid"><article class="panel"><div class="panel-title"><div><p class="eyebrow">RECEIVER</p><h2>协议健康状态</h2></div><span class="section-dot"></span></div><div class="status-list premium-list"><div><span>DLNA / UPnP</span><b id="dlnaState">配置中</b></div><div><span>硬件解码</span><b id="decoderState">-</b></div><div><span>WebUI 实际端口</span><b id="runtimePort">-</b></div><div><span>最近错误</span><b id="lastError">无</b></div></div></article><article class="panel"><div class="panel-title"><div><p class="eyebrow">SYSTEM ACCESS</p><h2>特权与后台能力</h2></div><span class="section-dot violet-dot"></span></div><div class="status-list premium-list"><div><span>Magisk / Root</span><b id="rootState">-</b></div><div><span>Shizuku</span><b id="shizukuState">-</b></div><div><span>开机兜底</span><b id="bootState">-</b></div><div><span>扫码访问</span><b>电视首页二维码直达</b></div></div></article></div>
         </section>
-
-        <section id="page-protocols" class="page">
-          <div class="page-intro"><p class="eyebrow">DISCOVERY & PROTOCOLS</p><h2>接收协议与广播</h2><p>控制电视向局域网暴露哪些投屏协议，以及镜像画面策略。</p></div>
-          <form id="configForm">
-            <article class="panel">
-              <div class="panel-title"><div><h2>接收协议</h2><p>关闭不使用的协议可以减少广播和后台活动。</p></div></div>
-              <div class="switch-grid">
-                <label class="switch-row"><span><b>AirPlay</b><small>iPhone / iPad / Mac 镜像与媒体</small></span><input id="airPlayEnabled" type="checkbox"><i></i></label>
-                <label class="switch-row"><span><b>DLNA / UPnP</b><small>Emby、哔哩哔哩、优酷、爱奇艺等</small></span><input id="dlnaEnabled" type="checkbox"><i></i></label>
-                <label class="switch-row"><span><b>Miracast / WFD</b><small>Windows Win+K 与 Android 无线显示</small></span><input id="miracastEnabled" type="checkbox"><i></i></label>
-                <label class="switch-row"><span><b>自定义 mDNS</b><small>MiracastReceiver 自定义发现广播</small></span><input id="customMdnsEnabled" type="checkbox"><i></i></label>
-                <label class="switch-row"><span><b>AirPlay 音频</b><small>镜像时同步接收音频流</small></span><input id="airPlayAudioEnabled" type="checkbox"><i></i></label>
-                <label class="switch-row"><span><b>自动显示播放器</b><small>收到投屏后自动切到播放页面</small></span><input id="autoLaunchPlayer" type="checkbox"><i></i></label>
-              </div>
-            </article>
-
-            <article class="panel">
-              <div class="panel-title"><div><h2>广播身份与画面</h2><p>修改名称、DLNA 端口和镜像分辨率。</p></div></div>
-              <div class="form-grid">
-                <label>设备名称<input id="deviceNameInput" type="text" maxlength="64" placeholder="留空使用 Android TV 系统名称"></label>
-                <label>镜像最大分辨率<select id="mirrorMaxHeight"><option value="0">自动（电视最大分辨率）</option><option value="720">720p</option><option value="1080">1080p</option><option value="1440">1440p</option><option value="2160">2160p</option></select></label>
-                <label>DLNA / UPnP 端口<input id="upnpPort" type="number" min="1024" max="65535"></label>
-                <label>连接码<input id="connectionCode" type="text" readonly></label>
-              </div>
-              <div class="actions"><button type="button" id="regenCodeBtn">重新生成连接码</button><button type="submit" class="primary">保存并应用</button></div>
-            </article>
-          </form>
-        </section>
-
-        <section id="page-playback" class="page">
-          <div class="page-intro"><p class="eyebrow">NOW PLAYING</p><h2>远程播放器控制</h2><p>控制当前 DLNA/媒体播放任务并查看硬件解码状态。</p></div>
-          <article class="panel player-panel">
-            <div class="now-playing"><span class="now-icon">▶</span><div><strong id="nowTitle">当前没有播放</strong><span id="nowSource">-</span></div></div>
-            <div class="progress"><div id="progressFill"></div></div>
-            <div id="progressText" class="muted progress-label">00:00 / 00:00</div>
-            <div class="player-buttons"><button data-player="pause">Ⅱ 暂停</button><button class="primary play-main" data-player="play">▶ 播放</button><button data-player="stop">■ 停止</button></div>
-            <div class="form-grid compact">
-              <label>跳转到（秒）<input id="seekSeconds" type="number" min="0" value="0"></label>
-              <label>音量（0-100）<input id="volumeValue" type="number" min="0" max="100" value="100"></label>
-              <label>速度<input id="speedValue" type="number" min="0.25" max="4" step="0.25" value="1"></label>
-            </div>
-            <div class="actions"><button id="seekBtn">跳转</button><button id="volumeBtn">设置音量</button><button id="speedBtn">设置速度</button></div>
-            <div class="status-list top-gap premium-list"><div><span>当前解码器</span><b id="activeDecoder">-</b></div><div><span>硬件加速</span><b id="activeHardware">-</b></div></div>
-          </article>
-        </section>
-
-        <section id="page-system" class="page">
-          <div class="page-intro"><p class="eyebrow">SYSTEM & BACKGROUND</p><h2>WebUI 与后台运行</h2><p>管理鉴权、监听端口、开机启动与 Root / Shizuku 优化。</p></div>
-          <form id="systemForm">
-            <article class="panel">
-              <div class="switch-grid">
-                <label class="switch-row"><span><b>启用 WebUI</b><small>在局域网开放管理页面</small></span><input id="webUiEnabled" type="checkbox"><i></i></label>
-                <label class="switch-row"><span><b>WebUI Token 验证</b><small>二维码会自动携带 Token，建议保持开启</small></span><input id="webUiAuthRequired" type="checkbox"><i></i></label>
-                <label class="switch-row"><span><b>开机自动启动</b><small>BootReceiver + Magisk service.d</small></span><input id="autoStartOnBoot" type="checkbox"><i></i></label>
-              </div>
-              <div class="form-grid port-grid">
-                <label>WebUI 首选端口<input id="webUiPort" type="number" min="1024" max="65535"><small>默认 18090；被占用时自动选择可用高位端口。</small></label>
-                <label>当前实际端口<input id="runtimePortInput" type="text" readonly><small id="portNotice">监听状态加载中…</small></label>
-              </div>
-              <div class="actions"><button type="button" id="optimizeBtn">执行后台优化</button><button type="button" id="rotateTokenBtn">轮换 WebUI Token</button><button type="submit" class="primary">保存并应用</button></div>
-            </article>
-          </form>
-          <article class="panel diagnostics-panel"><div class="panel-head"><div><p class="eyebrow">DIAGNOSTICS</p><h2>设备诊断快照</h2></div></div><pre id="diagnostics">加载中…</pre></article>
-        </section>
-
-        <section id="page-logs" class="page">
-          <div class="page-intro"><p class="eyebrow">LIVE TELEMETRY</p><h2>实时日志</h2><p>查看协议、网络、播放器和后台服务的最新运行记录。</p></div>
-          <article class="panel log-panel"><div class="panel-head"><div><h2>Receiver Log</h2><span class="muted">最多显示最近 400 条</span></div><div><button id="refreshLogsBtn">刷新</button><button id="clearLogsBtn">清空</button></div></div><pre id="logs">加载中…</pre></article>
-        </section>
-
+        <section id="page-protocols" class="page"><div class="page-intro"><p class="eyebrow">DISCOVERY & PROTOCOLS</p><h2>接收协议与广播</h2><p>控制电视向局域网暴露哪些投屏协议，以及镜像画面策略。</p></div><form id="configForm"><article class="panel"><div class="panel-title"><div><h2>接收协议</h2><p>关闭不使用的协议可以减少广播和后台活动。</p></div></div><div class="switch-grid"><label class="switch-row"><span><b>AirPlay</b><small>iPhone / iPad / Mac 镜像与媒体</small></span><input id="airPlayEnabled" type="checkbox"><i></i></label><label class="switch-row"><span><b>DLNA / UPnP</b><small>Emby、哔哩哔哩、优酷、爱奇艺等</small></span><input id="dlnaEnabled" type="checkbox"><i></i></label><label class="switch-row"><span><b>Miracast / WFD</b><small>Windows Win+K 与 Android 无线显示</small></span><input id="miracastEnabled" type="checkbox"><i></i></label><label class="switch-row"><span><b>自定义 mDNS</b><small>MiracastReceiver 自定义发现广播</small></span><input id="customMdnsEnabled" type="checkbox"><i></i></label><label class="switch-row"><span><b>AirPlay 音频</b><small>镜像时同步接收音频流</small></span><input id="airPlayAudioEnabled" type="checkbox"><i></i></label><label class="switch-row"><span><b>自动显示播放器</b><small>收到投屏后自动切到播放页面</small></span><input id="autoLaunchPlayer" type="checkbox"><i></i></label></div></article><article class="panel"><div class="panel-title"><div><h2>广播身份与画面</h2><p>修改名称、DLNA 端口和镜像分辨率。</p></div></div><div class="form-grid"><label>设备名称<input id="deviceNameInput" type="text" maxlength="64" placeholder="留空使用 Android TV 系统名称"></label><label>镜像最大分辨率<select id="mirrorMaxHeight"><option value="0">自动（电视最大分辨率）</option><option value="720">720p</option><option value="1080">1080p</option><option value="1440">1440p</option><option value="2160">2160p</option></select></label><label>DLNA / UPnP 端口<input id="upnpPort" type="number" min="1024" max="65535"></label><label>连接码<input id="connectionCode" type="text" readonly></label></div><div class="actions"><button type="button" id="regenCodeBtn">重新生成连接码</button><button type="submit" class="primary">保存并应用</button></div></article></form></section>
+        <section id="page-playback" class="page"><div class="page-intro"><p class="eyebrow">NOW PLAYING</p><h2>远程播放器控制</h2><p>控制当前 DLNA/媒体播放任务并查看硬件解码状态。</p></div><article class="panel player-panel"><div class="now-playing"><span class="now-icon">▶</span><div><strong id="nowTitle">当前没有播放</strong><span id="nowSource">-</span></div></div><div class="progress"><div id="progressFill"></div></div><div id="progressText" class="muted progress-label">00:00 / 00:00</div><div class="player-buttons"><button data-player="pause">Ⅱ 暂停</button><button class="primary play-main" data-player="play">▶ 播放</button><button data-player="stop">■ 停止</button></div><div class="form-grid compact"><label>跳转到（秒）<input id="seekSeconds" type="number" min="0" value="0"></label><label>音量（0-100）<input id="volumeValue" type="number" min="0" max="100" value="100"></label><label>速度<input id="speedValue" type="number" min="0.25" max="4" step="0.25" value="1"></label></div><div class="actions"><button id="seekBtn">跳转</button><button id="volumeBtn">设置音量</button><button id="speedBtn">设置速度</button></div><div class="status-list top-gap premium-list"><div><span>当前解码器</span><b id="activeDecoder">-</b></div><div><span>硬件加速</span><b id="activeHardware">-</b></div></div></article></section>
+        <section id="page-system" class="page"><div class="page-intro"><p class="eyebrow">SYSTEM & BACKGROUND</p><h2>WebUI 与后台运行</h2><p>管理鉴权、监听端口、开机启动与 Root / Shizuku 优化。</p></div><form id="systemForm"><article class="panel"><div class="switch-grid"><label class="switch-row"><span><b>启用 WebUI</b><small>在局域网开放管理页面</small></span><input id="webUiEnabled" type="checkbox"><i></i></label><label class="switch-row"><span><b>WebUI Token 验证</b><small>二维码会自动携带 Token，建议保持开启</small></span><input id="webUiAuthRequired" type="checkbox"><i></i></label><label class="switch-row"><span><b>开机自动启动</b><small>BootReceiver + Magisk service.d</small></span><input id="autoStartOnBoot" type="checkbox"><i></i></label></div><div class="form-grid port-grid"><label>WebUI 首选端口<input id="webUiPort" type="number" min="1024" max="65535"><small>默认 18090；被占用时自动选择可用高位端口。</small></label><label>当前实际端口<input id="runtimePortInput" type="text" readonly><small id="portNotice">监听状态加载中…</small></label></div><div class="actions"><button type="button" id="optimizeBtn">执行后台优化</button><button type="button" id="rotateTokenBtn">轮换 WebUI Token</button><button type="submit" class="primary">保存并应用</button></div></article></form><article class="panel diagnostics-panel"><div class="panel-head"><div><p class="eyebrow">DIAGNOSTICS</p><h2>设备诊断快照</h2></div></div><pre id="diagnostics">加载中…</pre></article></section>
+        <section id="page-logs" class="page"><div class="page-intro"><p class="eyebrow">LIVE TELEMETRY</p><h2>实时日志</h2><p>查看协议、网络、播放器和后台服务的最新运行记录。</p></div><article class="panel log-panel"><div class="panel-head"><div><h2>Receiver Log</h2><span class="muted">最多显示最近 400 条</span></div><div><button id="refreshLogsBtn">刷新</button><button id="clearLogsBtn">清空</button></div></div><pre id="logs">加载中…</pre></article></section>
         <div id="toast" class="toast hidden"></div>
       </main>
     </div>

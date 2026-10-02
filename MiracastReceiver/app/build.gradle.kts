@@ -120,7 +120,8 @@ dependencies {
     implementation("com.squareup.retrofit2:converter-gson:2.11.0")
     implementation("com.google.code.gson:gson:2.11.0")
 
-    val media3Version = "1.11.0"
+    // 1.9+ raises Media3 minSdk to 23. Keep the newest stable line compatible with our minSdk 21.
+    val media3Version = "1.8.1"
     implementation("androidx.media3:media3-exoplayer:$media3Version")
     implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
     implementation("androidx.media3:media3-exoplayer-dash:$media3Version")

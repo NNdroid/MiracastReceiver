@@ -9,6 +9,7 @@ class AirPlayDualStackSourceTest {
     private val rtsp = File("src/main/java/com/weekd/miracastreceiver/airplay/RtspHandler.kt").readText()
     private val mirror = File("src/main/java/com/weekd/miracastreceiver/airplay/handshake/MirrorStreamServer.kt").readText()
     private val buffered = File("src/main/java/com/weekd/miracastreceiver/airplay/handshake/BufferedAudioServer.kt").readText()
+    private val ntp = File("src/main/java/com/weekd/miracastreceiver/airplay/handshake/AirPlayNtpClient.kt").readText()
     private val ports = File("src/main/java/com/weekd/miracastreceiver/utils/PortUtils.kt").readText()
 
     @Test
@@ -22,6 +23,13 @@ class AirPlayDualStackSourceTest {
         assertTrue(mirror.contains("PortUtils.bindEphemeralServerSocket()"))
         assertTrue(buffered.contains("PortUtils.bindEphemeralServerSocket()"))
         assertTrue(ports.contains("fun bindEphemeralServerSocket"))
+    }
+
+    @Test
+    fun airPlay2NtpUdpSocketFollowsSenderAddressFamily() {
+        assertTrue(ntp.contains("remoteAddress is Inet6Address"))
+        assertTrue(ntp.contains("InetAddress.getByName(\"::\")"))
+        assertTrue(ntp.contains("InetAddress.getByName(\"0.0.0.0\")"))
     }
 
     @Test

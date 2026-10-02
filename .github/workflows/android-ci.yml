@@ -38,6 +38,15 @@ jobs:
       - name: Validate WebUI JavaScript
         run: node --check app/src/main/assets/webui/app.js
 
+      - name: Validate Android TV branding resources
+        run: |
+          grep -q 'android:icon="@mipmap/ic_launcher"' app/src/main/AndroidManifest.xml
+          grep -q 'android:banner="@drawable/tv_banner"' app/src/main/AndroidManifest.xml
+          ! grep -q 'android:roundIcon=' app/src/main/AndroidManifest.xml
+          grep -q 'android:width="160dp"' app/src/main/res/drawable/tv_banner.xml
+          grep -q 'android:height="90dp"' app/src/main/res/drawable/tv_banner.xml
+          grep -q '<adaptive-icon' app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml
+
       - name: Unit tests
         run: ./gradlew :app:testDebugUnitTest --stacktrace
 

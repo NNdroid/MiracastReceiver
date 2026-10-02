@@ -1,10 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp" android:height="108dp"
-    android:viewportWidth="108" android:viewportHeight="108">
-    <path android:fillColor="#071A3D" android:pathData="M0,0H108V108H0Z"/>
-    <path android:fillColor="#0E45B5" android:fillAlpha="0.95" android:pathData="M-12,24 C18,4 46,4 74,0 C88,-2 100,-5 118,-12 L118,18 C91,29 70,32 49,36 C24,40 4,45 -12,57 Z"/>
-    <path android:fillColor="#00C8FF" android:fillAlpha="0.38" android:pathData="M-15,28 C18,10 46,10 75,5 C92,2 105,-2 120,-10 L120,-2 C93,11 74,15 51,19 C25,24 5,31 -15,45 Z"/>
-    <path android:fillColor="#195CFF" android:fillAlpha="0.9" android:pathData="M-10,96 C21,83 48,84 76,78 C94,74 107,68 118,58 L118,112 H-10 Z"/>
-    <path android:fillColor="#8B5CFF" android:fillAlpha="0.34" android:pathData="M12,108 C44,91 72,95 96,83 C103,80 110,75 118,67 L118,108 Z"/>
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path android:fillColor="#06152F" android:pathData="M0,0H108V108H0Z" />
+
+    <!-- Broad color fields stay away from the outer mask edge so every launcher shape remains clean. -->
+    <path
+        android:fillColor="#0B4ED4"
+        android:fillAlpha="0.82"
+        android:pathData="M-8,30 C17,14 42,14 65,9 C82,6 98,2 116,-7 L116,20 C94,31 76,35 57,39 C34,44 12,48 -8,61 Z" />
+    <path
+        android:fillColor="#18D7FF"
+        android:fillAlpha="0.18"
+        android:pathData="M-8,35 C18,20 41,20 65,15 C84,11 99,7 116,0 L116,9 C96,19 78,24 58,28 C34,33 12,38 -8,50 Z" />
+    <path
+        android:fillColor="#175BEF"
+        android:fillAlpha="0.82"
+        android:pathData="M-8,93 C20,82 45,84 70,78 C89,74 103,67 116,57 L116,116 H-8 Z" />
+    <path
+        android:fillColor="#7C55F4"
+        android:fillAlpha="0.22"
+        android:pathData="M18,108 C46,93 70,95 92,85 C102,80 110,74 116,68 L116,108 Z" />
 </vector>

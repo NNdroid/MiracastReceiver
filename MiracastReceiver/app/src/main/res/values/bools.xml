@@ -2,4 +2,5 @@
 <resources>
     <!-- Shizuku provider requires API 23+. Keep Android 5.x installs on the Root/standard path. -->
     <bool name="shizuku_provider_enabled">false</bool>
+    <bool name="light_system_bars">true</bool>
 </resources>

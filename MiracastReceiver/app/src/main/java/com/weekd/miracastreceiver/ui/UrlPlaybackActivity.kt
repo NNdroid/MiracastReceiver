@@ -9,6 +9,7 @@ import android.net.Network
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
+import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.ProgressBar
@@ -37,6 +38,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import okhttp3.ConnectionPool
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import org.json.JSONObject
 import timber.log.Timber
 import java.util.concurrent.TimeUnit
@@ -65,6 +67,7 @@ class UrlPlaybackActivity : AppCompatActivity() {
     private lateinit var tvTitle: TextView
     private lateinit var tvStatus: TextView
     private lateinit var tvPlaybackMeta: TextView
+    private lateinit var tvStreamInfo: TextView
     private lateinit var tvError: TextView
     private lateinit var bufferingIndicator: ProgressBar
 
@@ -80,6 +83,11 @@ class UrlPlaybackActivity : AppCompatActivity() {
     private var waitingForNetwork = false
     private var loadStartedAtMs = 0L
     private var bandwidthEstimateBps = 0L
+    private var lastDecoderName = ""
+    private var lastDecoderInitDurationMs = -1L
+    private var droppedVideoFrames = 0L
+    private var isStreamInfoVisible = false
+    @Volatile private var lastHttpProtocol = "—"
 
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
@@ -90,6 +98,16 @@ class UrlPlaybackActivity : AppCompatActivity() {
             .followRedirects(true)
             .followSslRedirects(true)
             .connectionPool(ConnectionPool(8, 5, TimeUnit.MINUTES))
+            .addNetworkInterceptor { chain ->
+                val response = chain.proceed(chain.request())
+                lastHttpProtocol = when (response.protocol) {
+                    Protocol.HTTP_2, Protocol.H2_PRIOR_KNOWLEDGE -> "HTTP/2"
+                    Protocol.HTTP_1_1 -> "HTTP/1.1"
+                    Protocol.HTTP_1_0 -> "HTTP/1.0"
+                    else -> response.protocol.toString()
+                }
+                response
+            }
             .build()
     }
 
@@ -127,6 +145,7 @@ class UrlPlaybackActivity : AppCompatActivity() {
         tvTitle = findViewById(R.id.tv_title)
         tvStatus = findViewById(R.id.tv_status)
         tvPlaybackMeta = findViewById(R.id.tv_playback_meta)
+        tvStreamInfo = findViewById(R.id.tv_stream_info)
         tvError = findViewById(R.id.tv_error)
         bufferingIndicator = findViewById(R.id.buffering_indicator)
         findViewById<View>(R.id.airplay_mirror_surface).visibility = View.GONE
@@ -146,6 +165,20 @@ class UrlPlaybackActivity : AppCompatActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleIntent(intent)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN) {
+            if (event.keyCode == KeyEvent.KEYCODE_INFO || event.keyCode == KeyEvent.KEYCODE_MENU) {
+                toggleStreamInfo()
+                return true
+            }
+            if (event.keyCode == KeyEvent.KEYCODE_BACK && isStreamInfoVisible) {
+                hideStreamInfo()
+                return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     private fun handleIntent(intent: Intent) {
@@ -183,6 +216,10 @@ class UrlPlaybackActivity : AppCompatActivity() {
 
         bufferingIndicator.visibility = View.VISIBLE
         loadStartedAtMs = SystemClock.elapsedRealtime()
+        droppedVideoFrames = 0L
+        lastDecoderName = ""
+        lastDecoderInitDurationMs = -1L
+        lastHttpProtocol = "—"
         exo.setMediaItem(createMediaItem(currentUrl), true)
         exo.playWhenReady = true
         exo.prepare()
@@ -237,12 +274,14 @@ class UrlPlaybackActivity : AppCompatActivity() {
                         if (startupMs >= 0L) Timber.i("URL playback ready in ${startupMs}ms: $currentUrl")
                         loadStartedAtMs = 0L
                         updatePlaybackMeta()
+                        updateDetailedInfoIfVisible()
                         updateSnapshot(if (created.isPlaying) "PLAYING" else "READY")
                     }
                     Player.STATE_ENDED -> {
                         bufferingIndicator.visibility = View.GONE
                         tvStatus.setText(R.string.playback_finished)
                         updatePlaybackMeta()
+                        updateDetailedInfoIfVisible()
                         updateSnapshot("ENDED")
                     }
                     Player.STATE_IDLE -> updateSnapshot("IDLE")
@@ -253,6 +292,7 @@ class UrlPlaybackActivity : AppCompatActivity() {
                 if (created.playbackState == Player.STATE_READY) {
                     tvStatus.setText(if (isPlaying) R.string.playing else R.string.paused)
                     updatePlaybackMeta()
+                    updateDetailedInfoIfVisible()
                     updateSnapshot(if (isPlaying) "PLAYING" else "PAUSED")
                 }
             }
@@ -273,6 +313,24 @@ class UrlPlaybackActivity : AppCompatActivity() {
                 bitrateEstimate: Long
             ) {
                 bandwidthEstimateBps = bitrateEstimate
+            }
+
+            override fun onVideoDecoderInitialized(
+                eventTime: AnalyticsListener.EventTime,
+                decoderName: String,
+                initializedTimestampMs: Long,
+                initializationDurationMs: Long
+            ) {
+                lastDecoderName = decoderName
+                lastDecoderInitDurationMs = initializationDurationMs
+            }
+
+            override fun onDroppedVideoFrames(
+                eventTime: AnalyticsListener.EventTime,
+                droppedFrames: Int,
+                elapsedMs: Long
+            ) {
+                droppedVideoFrames += droppedFrames.toLong()
             }
         })
         player = created
@@ -308,15 +366,19 @@ class UrlPlaybackActivity : AppCompatActivity() {
         return builder.build()
     }
 
-    private fun updatePlaybackMeta() {
-        val exo = player
+    private fun sourceLabel(): String {
         val clean = currentUrl.substringBefore('?').substringBefore('#').lowercase()
-        val source = when {
+        return when {
             clean.endsWith(".m3u8") -> "HLS"
             clean.endsWith(".mpd") -> "DASH"
             else -> "WEB URL"
         }
-        val parts = mutableListOf(source)
+    }
+
+    private fun updatePlaybackMeta() {
+        val exo = player
+        val parts = mutableListOf(sourceLabel())
+        if (lastHttpProtocol != "—") parts += lastHttpProtocol
         val videoSize = exo?.videoSize
         if ((videoSize?.width ?: 0) > 0 && (videoSize?.height ?: 0) > 0) {
             parts += "${videoSize!!.width}×${videoSize.height}"
@@ -331,6 +393,63 @@ class UrlPlaybackActivity : AppCompatActivity() {
         val duration = exo?.duration?.takeIf { it > 0 } ?: 0L
         if (duration > 0) parts += "${formatTimeMs(exo?.currentPosition ?: 0L)} / ${formatTimeMs(duration)}"
         tvPlaybackMeta.text = parts.joinToString("  •  ")
+    }
+
+    private fun toggleStreamInfo() {
+        if (isStreamInfoVisible) hideStreamInfo() else showStreamInfo()
+    }
+
+    private fun showStreamInfo() {
+        isStreamInfoVisible = true
+        tvStreamInfo.text = buildDetailedInfo()
+        tvStreamInfo.visibility = View.VISIBLE
+    }
+
+    private fun hideStreamInfo() {
+        isStreamInfoVisible = false
+        tvStreamInfo.visibility = View.GONE
+    }
+
+    private fun updateDetailedInfoIfVisible() {
+        if (isStreamInfoVisible) tvStreamInfo.text = buildDetailedInfo()
+    }
+
+    private fun buildDetailedInfo(): String {
+        val exo = player
+        val video = exo?.videoFormat
+        val audio = exo?.audioFormat
+        val videoSize = exo?.videoSize
+        val bitrateBps = listOfNotNull(video?.bitrate, video?.averageBitrate, video?.peakBitrate)
+            .firstOrNull { it != Format.NO_VALUE }?.toLong() ?: 0L
+        val bufferedMs = ((exo?.bufferedPosition ?: 0L) - (exo?.currentPosition ?: 0L)).coerceAtLeast(0L)
+        val duration = exo?.duration?.takeIf { it > 0 } ?: 0L
+        val position = exo?.currentPosition ?: 0L
+        val rows = listOf(
+            "来源" to sourceLabel(),
+            "HTTP" to lastHttpProtocol,
+            "源分辨率" to StreamInfoTracker.formatResolution(videoSize?.width ?: 0, videoSize?.height ?: 0),
+            "视频编码" to StreamInfoTracker.formatCodec(video?.sampleMimeType),
+            "HDR" to StreamInfoTracker.formatHdr(video),
+            "色彩空间" to StreamInfoTracker.formatColorSpace(video),
+            "色深" to StreamInfoTracker.formatBitDepth(video),
+            "色彩范围" to StreamInfoTracker.formatColorRange(video),
+            "帧率" to StreamInfoTracker.formatFps(video?.frameRate ?: 0f),
+            "视频码率" to StreamInfoTracker.formatBitrate(bitrateBps),
+            "实时网速" to StreamInfoTracker.formatSpeed(bandwidthEstimateBps / 8),
+            "音频编码" to StreamInfoTracker.formatCodec(audio?.sampleMimeType),
+            "音频声道" to StreamInfoTracker.formatAudioChannels(audio),
+            "采样率" to StreamInfoTracker.formatSampleRate(audio),
+            "解码器" to lastDecoderName.ifBlank { "—" },
+            "解码初始化" to if (lastDecoderInitDurationMs >= 0) "${lastDecoderInitDurationMs} ms" else "—",
+            "缓冲时长" to formatTimeMs(bufferedMs),
+            "缓冲比例" to StreamInfoTracker.formatBufferPercent(exo?.bufferedPercentage ?: -1),
+            "掉帧" to droppedVideoFrames.toString(),
+            "进度" to if (duration > 0) "${formatTimeMs(position)} / ${formatTimeMs(duration)}" else "直播 / 未知",
+            "播放速度" to String.format("%.2fx", exo?.playbackParameters?.speed ?: 1f)
+        )
+        return rows.joinToString("\n", prefix = "视频信息\n") { (label, value) ->
+            StreamInfoTracker.padLabel(label) + value
+        }
     }
 
     private fun formatTimeMs(ms: Long): String {
@@ -415,6 +534,7 @@ class UrlPlaybackActivity : AppCompatActivity() {
                 delay(1_000)
                 updateSnapshot()
                 updatePlaybackMeta()
+                updateDetailedInfoIfVisible()
             }
         }
     }

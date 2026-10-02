@@ -34,7 +34,7 @@ import java.security.SecureRandom
 /** Small authenticated LAN WebUI/API server with automatic port fallback. */
 class WebUiServer(
     context: Context,
-    private val preferredPort: Int,
+    private val port: Int,
     private val onReconfigureRequested: (String) -> Unit,
     private val onRestartReceiverRequested: () -> Unit
 ) {
@@ -47,19 +47,19 @@ class WebUiServer(
     fun start() {
         if (acceptJob?.isActive == true) return
 
-        RuntimeState.webUiPreferredPort = preferredPort
+        RuntimeState.webUiPreferredPort = port
         acceptJob = scope.launch {
             try {
                 val socket = bindServerSocket()
                 serverSocket = socket
                 val activePort = socket.localPort
                 RuntimeState.webUiActivePort = activePort
-                RuntimeState.webUiPortFallback = activePort != preferredPort
+                RuntimeState.webUiPortFallback = activePort != port
                 RuntimeState.webUiStartedAtMs = System.currentTimeMillis()
                 AppSettings.setLastWebUiBoundPort(appContext, activePort)
 
                 if (RuntimeState.webUiPortFallback) {
-                    Timber.w("WebUI preferred port $preferredPort is unavailable; using fallback port $activePort")
+                    Timber.w("WebUI preferred port $port is unavailable; using fallback port $activePort")
                 } else {
                     Timber.i("WebUI started on preferred port $activePort")
                 }
@@ -75,9 +75,9 @@ class WebUiServer(
                 }
             } catch (e: Exception) {
                 RuntimeState.resetWebUi()
-                RuntimeState.webUiPreferredPort = preferredPort
+                RuntimeState.webUiPreferredPort = port
                 RuntimeState.lastError = "WebUI: ${e.message.orEmpty()}"
-                Timber.e(e, "WebUI failed to start; preferred port=$preferredPort")
+                Timber.e(e, "WebUI failed to start; preferred port=$port")
             }
         }
     }
@@ -85,10 +85,10 @@ class WebUiServer(
     private fun bindServerSocket(): ServerSocket {
         val reservedPorts = setOf(AppSettings.getUpnpPort(appContext), MIRACAST_RTSP_PORT)
         val candidates = LinkedHashSet<Int>()
-        candidates += preferredPort
+        candidates += port
 
         val lastBound = AppSettings.getLastWebUiBoundPort(appContext)
-        if (lastBound in 1024..65535 && lastBound != preferredPort && lastBound !in reservedPorts) {
+        if (lastBound in 1024..65535 && lastBound != port && lastBound !in reservedPorts) {
             candidates += lastBound
         }
 
@@ -101,8 +101,6 @@ class WebUiServer(
             tryBind(candidate)?.let { return it }
         }
 
-        // Extremely unlikely fallback: ask the kernel for an unused ephemeral port, rejecting any
-        // protocol-reserved value if one happens to be selected.
         repeat(8) {
             val socket = tryBind(0) ?: return@repeat
             if (socket.localPort !in reservedPorts) return socket
@@ -118,8 +116,8 @@ class WebUiServer(
                 bind(InetSocketAddress("0.0.0.0", candidatePort), 32)
             }
         } catch (e: Exception) {
-            if (candidatePort == preferredPort) {
-                Timber.w(e, "WebUI preferred port $preferredPort is occupied/unavailable")
+            if (candidatePort == port) {
+                Timber.w(e, "WebUI preferred port $port is occupied/unavailable")
             }
             null
         }
@@ -132,7 +130,7 @@ class WebUiServer(
         acceptJob = null
         scope.cancel()
         RuntimeState.resetWebUi()
-        RuntimeState.webUiPreferredPort = preferredPort
+        RuntimeState.webUiPreferredPort = port
         Timber.i("WebUI stopped")
     }
 
@@ -185,7 +183,7 @@ class WebUiServer(
                         .put("ok", true)
                         .put("authRequired", AppSettings.isWebUiAuthRequired(appContext))
                         .put("activePort", RuntimeState.webUiActivePort)
-                        .put("preferredPort", preferredPort)
+                        .put("preferredPort", port)
                         .put("fallback", RuntimeState.webUiPortFallback))
                     method == "GET" && path == "/api/status" -> sendJson(output, 200, buildStatus())
                     method == "GET" && path == "/api/config" -> sendJson(output, 200, buildConfig())
@@ -244,7 +242,7 @@ class WebUiServer(
         }
 
         val requestedWebPort = if (json.has("webUiPort")) {
-            json.optInt("webUiPort", preferredPort)
+            json.optInt("webUiPort", port)
         } else {
             AppSettings.getWebUiPort(appContext)
         }
@@ -309,19 +307,17 @@ class WebUiServer(
         }
         if (requestedPort == activePort) return activePort
         if (requestedPort != currentPreferred && !isPortAvailable(requestedPort) && activePort > 0) {
-            // The restarted server tries the last successfully bound port before choosing another
-            // random port, so this is the best reconnect target when the new preference is occupied.
             return activePort
         }
         return requestedPort
     }
 
-    private fun isPortAvailable(port: Int): Boolean {
-        if (port == RuntimeState.webUiActivePort) return true
+    private fun isPortAvailable(candidatePort: Int): Boolean {
+        if (candidatePort == RuntimeState.webUiActivePort) return true
         return runCatching {
             ServerSocket().use { probe ->
                 probe.reuseAddress = true
-                probe.bind(InetSocketAddress("0.0.0.0", port), 1)
+                probe.bind(InetSocketAddress("0.0.0.0", candidatePort), 1)
             }
             true
         }.getOrDefault(false)
@@ -512,7 +508,7 @@ class WebUiServer(
             append("X-Frame-Options: DENY\r\n")
             append("Referrer-Policy: no-referrer\r\n")
             append("Permissions-Policy: camera=(), microphone=(), geolocation=()\r\n")
-            append("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'\r\n")
+            append("Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'\r\n")
             append("Connection: close\r\n\r\n")
         }
         output.write(header.toByteArray(StandardCharsets.US_ASCII))

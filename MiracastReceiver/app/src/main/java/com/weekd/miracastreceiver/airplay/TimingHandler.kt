@@ -1,12 +1,15 @@
-﻿package com.weekd.miracastreceiver.airplay
+package com.weekd.miracastreceiver.airplay
 
 import com.weekd.miracastreceiver.util.Logger
+import com.weekd.miracastreceiver.utils.PortUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.InetAddress
+import java.net.Inet6Address
 
 /**
  * TimingHandler — Responds to Apple NTP timing probes for A/V synchronization.
@@ -77,8 +80,18 @@ class TimingHandler {
      * @param port  UDP port to listen on. Defaults to [TIMING_PORT] (6002).
      */
     fun start(scope: CoroutineScope, port: Int = TIMING_PORT) {
+        startForPeer(scope, null, port)
+    }
+
+    /** Rebind timing UDP to the same address family as the active RTSP control peer. */
+    fun restartForPeer(scope: CoroutineScope, peerAddress: InetAddress, port: Int = TIMING_PORT) {
+        stop()
+        startForPeer(scope, peerAddress, port)
+    }
+
+    private fun startForPeer(scope: CoroutineScope, peerAddress: InetAddress?, port: Int) {
         scope.launch(Dispatchers.IO) {
-            runLoop(this, port)
+            runLoop(this, port, peerAddress)
         }
     }
 
@@ -100,12 +113,12 @@ class TimingHandler {
 
     // ─── Private: receive loop ────────────────────────────────────────────────
 
-    private fun runLoop(scope: CoroutineScope, port: Int) {
+    private fun runLoop(scope: CoroutineScope, port: Int, peerAddress: InetAddress?) {
         try {
-            // Use a local val to avoid repeated null-checks on the @Volatile field
-            val sock = DatagramSocket(port)
+            // Bind explicitly to the RTSP peer family; never rely on vendor IPV6_V6ONLY defaults.
+            val sock = PortUtils.bindDatagramSocketForPeer(port, peerAddress)
             socket = sock
-            Logger.i("Timing handler listening on UDP port $port")
+            Logger.i("Timing handler listening on UDP port $port family=${if (peerAddress is Inet6Address) "IPv6" else "IPv4"}")
 
             val buf = ByteArray(PACKET_SIZE)
             val packet = DatagramPacket(buf, buf.size)

@@ -4,6 +4,7 @@ import timber.log.Timber
 import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.DatagramSocket
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
@@ -63,6 +64,25 @@ object PortUtils {
             }
         }
         throw java.io.IOException("Unable to allocate a dual-stack ephemeral TCP port")
+    }
+
+    /**
+     * Bind a UDP listener to the wildcard address of the actual peer's address family.
+     *
+     * Android/vendor kernels differ in the default IPV6_V6ONLY behavior of an unspecified
+     * DatagramSocket. Never rely on IPv4-mapped IPv6 here: an IPv4 RTSP peer gets 0.0.0.0 and
+     * an IPv6 RTSP peer gets ::. Unknown peers intentionally fall back to IPv4 for legacy RAOP.
+     */
+    fun bindDatagramSocketForPeer(port: Int, peerAddress: InetAddress?): DatagramSocket {
+        require(port in 1..65535) { "Invalid UDP port $port" }
+        val wildcard = if (peerAddress is Inet6Address) IPV6_WILDCARD else IPV4_WILDCARD
+        return DatagramSocket(null).apply {
+            reuseAddress = true
+            bind(InetSocketAddress(wildcard, port))
+        }.also { socket ->
+            val family = if (wildcard is Inet6Address) "IPv6" else "IPv4"
+            Timber.i("UDP listener bound on $family wildcard port $port for peer=${peerAddress?.hostAddress ?: "unknown"}")
+        }
     }
 
     /** Bind an available port, preserving the caller's preferred/fallback order. */

@@ -110,6 +110,7 @@ class AirPlayReceiver(
 
     // UDP socket for receiving audio RTP packets — opened after RECORD, closed on TEARDOWN
     @Volatile private var audioSocket: DatagramSocket? = null
+    @Volatile private var legacyPeerAddress: java.net.InetAddress? = null
 
     // AirPlay 2 mirroring: data stream server + event channel + keys (set during SETUP).
     @Volatile private var mirrorServer: MirrorStreamServer? = null
@@ -196,8 +197,8 @@ class AirPlayReceiver(
     // ─── Private: startup ────────────────────────────────────────────────────
 
     private fun startTimingHandler() {
-        timingHandler = TimingHandler().also { it.start(scope) }
-        Logger.d("Timing handler started on UDP port ${TimingHandler.TIMING_PORT}")
+        timingHandler = TimingHandler()
+        Logger.d("Timing handler ready; waiting for RTSP peer address before UDP bind")
     }
 
     private fun startMdnsService() {
@@ -218,6 +219,11 @@ class AirPlayReceiver(
             videoSurfaceProvider = videoSurfaceProvider,
             onStreamingStarted = { session -> onStreamingStarted(session) },
             onStreamingStopped = { onStreamingStopped() },
+            onPeerAddressKnown = { peer ->
+                legacyPeerAddress = peer
+                timingHandler?.restartForPeer(scope, peer)
+                Logger.i("AirPlay RTSP peer=${peer.hostAddress}; UDP listeners use ${if (peer is java.net.Inet6Address) "IPv6" else "IPv4"}")
+            },
             onPhotoReceived = { bytes, imageType -> onPhotoReceived(bytes, imageType) },
             onPhotoCleared = { onPhotoCleared() },
             onMirrorSetupKeys = { aesKey, ecdhSecret, aesIv, remoteAddr, senderTimingPort ->
@@ -378,9 +384,10 @@ class AirPlayReceiver(
     private fun startAudioUdpReceiver() {
         scope.launch(Dispatchers.IO) {
             try {
-                val socket = DatagramSocket(AUDIO_RTP_PORT)
+                val peer = legacyPeerAddress
+                val socket = PortUtils.bindDatagramSocketForPeer(AUDIO_RTP_PORT, peer)
                 audioSocket = socket
-                Logger.i("Audio UDP receiver listening on port $AUDIO_RTP_PORT")
+                Logger.i("Audio UDP receiver listening on port $AUDIO_RTP_PORT family=${if (peer is java.net.Inet6Address) "IPv6" else "IPv4"}")
 
                 val buf    = ByteArray(MAX_AUDIO_PACKET_BYTES)
                 val packet = DatagramPacket(buf, buf.size)
@@ -538,6 +545,7 @@ class AirPlayReceiver(
         rtspHandler?.onVideoNalUnit = null
         try { audioSocket?.close() } catch (e: Exception) { /* non-fatal */ }
         audioSocket = null
+        legacyPeerAddress = null
         mirrorServer?.stop()
         mirrorServer = null
         audioServer?.stop()

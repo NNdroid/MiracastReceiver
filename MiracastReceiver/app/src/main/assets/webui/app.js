@@ -93,6 +93,51 @@ document.querySelectorAll('.nav').forEach(b=>b.addEventListener('click',()=>acti
 $('loginBtn').addEventListener('click', login);
 $('tokenInput').addEventListener('keydown', e=>{ if(e.key==='Enter') login(); });
 
+function injectUrlPlaybackCard(){
+  const page=$('page-playback');
+  if(!page || $('directUrlCard')) return;
+  const card=document.createElement('article');
+  card.id='directUrlCard';
+  card.className='panel';
+  card.innerHTML=`
+    <div class="panel-title"><div><p class="eyebrow">DIRECT STREAM</p><h2>HTTP / HLS / DASH 直接播放</h2><p>支持 m3u8、mpd、MP4、TS、WebM、MP3/AAC 等 Media3 可识别的 HTTP/HTTPS 媒体。</p></div></div>
+    <div class="form-grid">
+      <label style="grid-column:1/-1">媒体 URL<input id="directMediaUrl" type="url" maxlength="4096" placeholder="https://example.com/live/index.m3u8"></label>
+      <label>标题（可选）<input id="directMediaTitle" type="text" maxlength="160" placeholder="例如 CCTV 1"></label>
+      <label>User-Agent（可选）<input id="directUserAgent" type="text" maxlength="2048" placeholder="留空使用 MiracastReceiver"></label>
+      <label>Referer（可选）<input id="directReferer" type="text" maxlength="2048" placeholder="https://example.com/"></label>
+      <label>Authorization（可选）<input id="directAuthorization" type="text" maxlength="2048" placeholder="Bearer ..."></label>
+    </div>
+    <div class="actions"><button id="directPlayBtn" class="primary">▶ 立即播放</button></div>
+    <div class="muted">仅接受 http:// 与 https://。网络临时异常会按 1/2/4/8/16 秒自动重试，恢复网络后立即重新连接。</div>`;
+  const intro=page.querySelector('.page-intro');
+  if(intro && intro.nextSibling) page.insertBefore(card,intro.nextSibling); else page.appendChild(card);
+  $('directPlayBtn').addEventListener('click', openDirectUrl);
+  $('directMediaUrl').addEventListener('keydown', e=>{ if(e.key==='Enter') openDirectUrl(); });
+}
+
+async function openDirectUrl(){
+  const url=$('directMediaUrl').value.trim();
+  if(!/^https?:\/\//i.test(url)) return toast('请输入 http:// 或 https:// 媒体地址');
+  const headers={};
+  const ua=$('directUserAgent').value.trim();
+  const referer=$('directReferer').value.trim();
+  const authorization=$('directAuthorization').value.trim();
+  if(ua) headers['User-Agent']=ua;
+  if(referer) headers['Referer']=referer;
+  if(authorization) headers['Authorization']=authorization;
+  try{
+    await api('/api/actions/open-url',{
+      method:'POST',
+      body:JSON.stringify({url,title:$('directMediaTitle').value.trim(),headers})
+    });
+    toast('已发送到电视，正在打开播放器');
+    setTimeout(refreshStatus,500);
+  }catch(e){ toast(`URL 播放失败：${e.message}`); }
+}
+
+injectUrlPlaybackCard();
+
 async function refreshStatus(){
   try {
     const s = await api('/api/status');
@@ -127,7 +172,8 @@ async function refreshStatus(){
     $('lastError').textContent=s.service.lastError || '无';
 
     $('nowTitle').textContent=s.playback.title || '当前没有播放';
-    $('nowSource').textContent=s.playback.source || s.playback.uri || '-';
+    const retryText=s.playback.retryAttempt ? ` · 重试 ${s.playback.retryAttempt}/5` : '';
+    $('nowSource').textContent=(s.playback.source || s.playback.uri || '-') + retryText;
     $('progressText').textContent=`${fmtTime(s.playback.positionMs)} / ${fmtTime(s.playback.durationMs)}`;
     const pct=s.playback.durationMs>0 ? Math.min(100, Math.max(0, s.playback.positionMs/s.playback.durationMs*100)) : 0;
     $('progressFill').style.width=`${pct}%`;

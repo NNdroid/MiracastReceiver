@@ -12,6 +12,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.Lifecycle
 import com.weekd.miracastreceiver.R
 import com.weekd.miracastreceiver.service.CastReceiverService
 import com.weekd.miracastreceiver.util.AppSettings
@@ -24,11 +25,8 @@ class MainActivity : AppCompatActivity() {
         fun requestInitialFocus() = Unit
     }
 
-    private enum class Destination(val navViewId: Int) {
-        HOME(R.id.nav_home),
-        PLAYER(R.id.nav_player),
-        SETTINGS(R.id.nav_settings),
-        ABOUT(R.id.nav_about)
+    private enum class Destination {
+        HOME, PLAYER, SETTINGS, ABOUT
     }
 
     private val backPressExitGate = BackPressExitGate()
@@ -38,7 +36,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val REQUEST_CODE_WIFI_DIRECT = 1001
         private const val FOCUS_SCALE = 1.06f
-        private const val FOCUS_ANIMATION_MS = 110L
+        private const val FOCUS_ANIMATION_MS = 90L
         private val WIFI_DIRECT_PERMISSIONS: Array<String>
             get() = if (Build.VERSION.SDK_INT >= 33) {
                 arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
@@ -57,7 +55,7 @@ class MainActivity : AppCompatActivity() {
         if (savedInstanceState == null) {
             showDestination(Destination.HOME, moveFocus = true)
         } else {
-            currentDestination = supportFragmentManager.fragments.lastOrNull()?.let {
+            currentDestination = supportFragmentManager.fragments.firstOrNull { !it.isHidden }?.let {
                 when (it) {
                     is SettingsFragment -> Destination.SETTINGS
                     is PlayerHubFragment -> Destination.PLAYER
@@ -76,7 +74,6 @@ class MainActivity : AppCompatActivity() {
             Destination.SETTINGS to findViewById(R.id.nav_settings),
             Destination.ABOUT to findViewById(R.id.nav_about)
         )
-
         navItems.forEachIndexed { index, (destination, view) ->
             val previous = navItems[(index - 1 + navItems.size) % navItems.size].second
             val next = navItems[(index + 1) % navItems.size].second
@@ -86,7 +83,7 @@ class MainActivity : AppCompatActivity() {
             view.setOnFocusChangeListener { target, hasFocus ->
                 target.animate().cancel()
                 val scale = if (hasFocus) FOCUS_SCALE else 1f
-                target.animate().scaleX(scale).scaleY(scale).setDuration(FOCUS_ANIMATION_MS).start()
+                target.animate().scaleX(scale).scaleY(scale).setDuration(FOCUS_ANIMATION_MS).withLayer().start()
             }
         }
     }
@@ -99,19 +96,35 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showDestination(destination: Destination, moveFocus: Boolean) {
+        val manager = supportFragmentManager
+        val existing = manager.findFragmentByTag(destination.name)
+        if (destination == currentDestination && existing != null && !existing.isHidden) {
+            if (!moveFocus) (existing as? TvPage)?.requestInitialFocus()
+            return
+        }
+
+        val target = existing ?: fragmentFor(destination)
+        val transaction = manager.beginTransaction().setReorderingAllowed(true)
+        manager.fragments.forEach { fragment ->
+            if (fragment != target) {
+                transaction.hide(fragment)
+                transaction.setMaxLifecycle(fragment, Lifecycle.State.CREATED)
+            }
+        }
+        if (target.isAdded) transaction.show(target)
+        else transaction.add(R.id.fragment_container, target, destination.name)
+        transaction.setMaxLifecycle(target, Lifecycle.State.RESUMED)
+
         currentDestination = destination
-        supportFragmentManager.beginTransaction()
-            .setReorderingAllowed(true)
-            .replace(R.id.fragment_container, fragmentFor(destination), destination.name)
-            .commit()
+        transaction.runOnCommit {
+            if (!moveFocus) (target as? TvPage)?.requestInitialFocus()
+        }
+        transaction.commit()
         updateNavigationSelection()
 
         if (moveFocus) {
             val navView = navItems.first { it.first == destination }.second
             navView.post { navView.requestFocus() }
-        } else {
-            supportFragmentManager.executePendingTransactions()
-            (supportFragmentManager.findFragmentByTag(destination.name) as? TvPage)?.requestInitialFocus()
         }
     }
 
@@ -129,25 +142,19 @@ class MainActivity : AppCompatActivity() {
         val missing = WIFI_DIRECT_PERMISSIONS.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
-        if (missing.isNotEmpty()) {
-            ActivityCompat.requestPermissions(this, missing.toTypedArray(), REQUEST_CODE_WIFI_DIRECT)
-        }
+        if (missing.isNotEmpty()) ActivityCompat.requestPermissions(this, missing.toTypedArray(), REQUEST_CODE_WIFI_DIRECT)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != REQUEST_CODE_WIFI_DIRECT) return
-        if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-            startCastService()
-        } else {
-            Toast.makeText(this, R.string.wifi_direct_permission_denied, Toast.LENGTH_LONG).show()
-        }
+        if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) startCastService()
+        else Toast.makeText(this, R.string.wifi_direct_permission_denied, Toast.LENGTH_LONG).show()
     }
 
     fun startCastService() {
-        runCatching {
-            ContextCompat.startForegroundService(this, Intent(this, CastReceiverService::class.java))
-        }.onFailure { Timber.e(it, "Unable to start receiver service") }
+        runCatching { ContextCompat.startForegroundService(this, Intent(this, CastReceiverService::class.java)) }
+            .onFailure { Timber.e(it, "Unable to start receiver service") }
     }
 
     override fun onPause() {
@@ -162,10 +169,7 @@ class MainActivity : AppCompatActivity() {
             backPressExitGate.reset()
             return
         }
-        if (backPressExitGate.registerPress(SystemClock.elapsedRealtime())) {
-            finish()
-        } else {
-            Toast.makeText(this, R.string.press_back_again_to_exit, Toast.LENGTH_SHORT).show()
-        }
+        if (backPressExitGate.registerPress(SystemClock.elapsedRealtime())) finish()
+        else Toast.makeText(this, R.string.press_back_again_to_exit, Toast.LENGTH_SHORT).show()
     }
 }

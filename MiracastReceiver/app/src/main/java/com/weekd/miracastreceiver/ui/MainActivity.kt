@@ -23,6 +23,7 @@ import com.weekd.miracastreceiver.service.CastReceiverService
 import com.weekd.miracastreceiver.util.AppSettings
 import com.weekd.miracastreceiver.util.PrivilegedAccess
 import com.weekd.miracastreceiver.utils.NetworkUtils
+import com.weekd.miracastreceiver.web.RuntimeState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -41,6 +42,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvConnectionCode: TextView
     private lateinit var tvWebUiUrl: TextView
     private lateinit var tvWebUiToken: TextView
+    private lateinit var tvWebUiPortStatus: TextView
     private lateinit var tvStatus: TextView
     private lateinit var tvRootStatus: TextView
     private lateinit var tvShizukuStatus: TextView
@@ -106,6 +108,7 @@ class MainActivity : AppCompatActivity() {
         tvConnectionCode = findViewById(R.id.tv_connection_code)
         tvWebUiUrl = findViewById(R.id.tv_webui_url)
         tvWebUiToken = findViewById(R.id.tv_webui_token)
+        tvWebUiPortStatus = findViewById(R.id.tv_webui_port_status)
         tvStatus = findViewById(R.id.tv_status)
         tvRootStatus = findViewById(R.id.tv_root_status)
         tvShizukuStatus = findViewById(R.id.tv_shizuku_status)
@@ -175,16 +178,31 @@ class MainActivity : AppCompatActivity() {
     private fun updateWebUiInfo() {
         val ip = NetworkUtils.getLocalIpAddress()
         val enabled = AppSettings.isWebUiEnabled(this)
-        val port = AppSettings.getWebUiPort(this)
+        val preferredPort = AppSettings.getWebUiPort(this)
+        val runtimePort = RuntimeState.webUiPort.takeIf { it in 1024..65535 }
+            ?: AppSettings.getWebUiLastBoundPort(this)
+            ?: preferredPort
+        val fallback = runtimePort != preferredPort
+
         tvWebUiUrl.text = when {
             !enabled -> "WebUI 已关闭"
             ip == null -> "WebUI 等待网络"
-            else -> "http://$ip:$port"
+            else -> "http://$ip:$runtimePort"
         }
+        tvWebUiPortStatus.text = when {
+            !enabled -> "局域网管理服务未启用"
+            fallback -> "实际 $runtimePort · 首选 $preferredPort 被占用，已临时回退"
+            else -> "实际 $runtimePort · 使用首选端口"
+        }
+        tvWebUiPortStatus.setTextColor(
+            ContextCompat.getColor(this, if (fallback) R.color.warning else R.color.text_secondary)
+        )
+
         tvWebUiToken.text = if (!AppSettings.isWebUiAuthRequired(this)) {
-            "Token 验证：已关闭"
+            "扫码直达 · Token 验证已关闭"
         } else {
-            "Token: ${AppSettings.getOrCreateWebUiToken(this)}"
+            val token = AppSettings.getOrCreateWebUiToken(this)
+            "Token 已嵌入二维码 · ${token.take(8)}…${token.takeLast(6)}"
         }
     }
 

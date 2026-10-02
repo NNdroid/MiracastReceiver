@@ -8,7 +8,9 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.View
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -23,6 +25,8 @@ import com.weekd.miracastreceiver.service.CastReceiverService
 import com.weekd.miracastreceiver.util.AppSettings
 import com.weekd.miracastreceiver.util.PrivilegedAccess
 import com.weekd.miracastreceiver.utils.NetworkUtils
+import com.weekd.miracastreceiver.utils.QrCodeUtils
+import com.weekd.miracastreceiver.web.RuntimeState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -41,6 +45,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvConnectionCode: TextView
     private lateinit var tvWebUiUrl: TextView
     private lateinit var tvWebUiToken: TextView
+    private lateinit var tvWebUiPortStatus: TextView
+    private lateinit var tvQrHint: TextView
+    private lateinit var ivWebUiQr: ImageView
     private lateinit var tvStatus: TextView
     private lateinit var tvRootStatus: TextView
     private lateinit var tvShizukuStatus: TextView
@@ -59,6 +66,7 @@ class MainActivity : AppCompatActivity() {
     private var privilegedSetupAttempted = false
     private var suppressSettingCallbacks = false
     private var settingsApplyJob: Job? = null
+    private var lastQrPayload: String? = null
 
     private val shizukuPermissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
         if (requestCode != PrivilegedAccess.SHIZUKU_PERMISSION_REQUEST) return@OnRequestPermissionResultListener
@@ -106,6 +114,9 @@ class MainActivity : AppCompatActivity() {
         tvConnectionCode = findViewById(R.id.tv_connection_code)
         tvWebUiUrl = findViewById(R.id.tv_webui_url)
         tvWebUiToken = findViewById(R.id.tv_webui_token)
+        tvWebUiPortStatus = findViewById(R.id.tv_webui_port_status)
+        tvQrHint = findViewById(R.id.tv_qr_hint)
+        ivWebUiQr = findViewById(R.id.iv_webui_qr)
         tvStatus = findViewById(R.id.tv_status)
         tvRootStatus = findViewById(R.id.tv_root_status)
         tvShizukuStatus = findViewById(R.id.tv_shizuku_status)
@@ -175,16 +186,62 @@ class MainActivity : AppCompatActivity() {
     private fun updateWebUiInfo() {
         val ip = NetworkUtils.getLocalIpAddress()
         val enabled = AppSettings.isWebUiEnabled(this)
-        val port = AppSettings.getWebUiPort(this)
+        val preferredPort = AppSettings.getWebUiPort(this)
+        val activePort = RuntimeState.webUiActivePort.takeIf { it in 1024..65535 }
+        val actualPort = activePort ?: preferredPort
+        val serverReady = enabled && ip != null && activePort != null
+        val fallback = serverReady && RuntimeState.webUiPortFallback
+
         tvWebUiUrl.text = when {
             !enabled -> "WebUI 已关闭"
             ip == null -> "WebUI 等待网络"
-            else -> "http://$ip:$port"
+            activePort == null -> "WebUI 正在启动 · 首选端口 $preferredPort"
+            else -> "http://$ip:$actualPort"
         }
-        tvWebUiToken.text = if (!AppSettings.isWebUiAuthRequired(this)) {
-            "Token 验证：已关闭"
+
+        tvWebUiPortStatus.text = when {
+            !enabled -> "局域网管理服务未启用"
+            fallback -> "首选端口 $preferredPort 被占用 · 已自动切换到 $actualPort"
+            activePort != null -> "监听端口 $actualPort · 局域网可访问"
+            else -> "首选端口 $preferredPort · 等待监听"
+        }
+        tvWebUiPortStatus.setTextColor(
+            ContextCompat.getColor(this, if (fallback) R.color.warning else R.color.text_secondary)
+        )
+
+        val authRequired = AppSettings.isWebUiAuthRequired(this)
+        val token = AppSettings.getOrCreateWebUiToken(this)
+        tvWebUiToken.text = if (!authRequired) {
+            "扫码后直接进入 · Token 验证已关闭"
         } else {
-            "Token: ${AppSettings.getOrCreateWebUiToken(this)}"
+            "Token 已嵌入二维码 · ${token.take(8)}…${token.takeLast(6)}"
+        }
+
+        if (serverReady) {
+            val baseUrl = "http://$ip:$actualPort/"
+            val qrPayload = if (authRequired) "$baseUrl?token=$token" else baseUrl
+            if (qrPayload != lastQrPayload) {
+                val bitmap = QrCodeUtils.createBitmap(qrPayload, 512)
+                if (bitmap != null) {
+                    ivWebUiQr.setImageBitmap(bitmap)
+                    ivWebUiQr.visibility = View.VISIBLE
+                    lastQrPayload = qrPayload
+                } else {
+                    ivWebUiQr.setImageDrawable(null)
+                    ivWebUiQr.visibility = View.INVISIBLE
+                    lastQrPayload = null
+                }
+            }
+            tvQrHint.text = if (authRequired) "手机扫码直达 · 自动完成 Token 登录" else "手机扫码直达 WebUI"
+        } else {
+            ivWebUiQr.setImageDrawable(null)
+            ivWebUiQr.visibility = View.INVISIBLE
+            lastQrPayload = null
+            tvQrHint.text = when {
+                !enabled -> "开启 WebUI 后显示二维码"
+                ip == null -> "连接局域网后生成二维码"
+                else -> "WebUI 启动后生成二维码"
+            }
         }
     }
 
@@ -294,10 +351,10 @@ class MainActivity : AppCompatActivity() {
             while (true) {
                 val ip = NetworkUtils.getLocalIpAddress()
                 tvDeviceIp.text = getString(R.string.device_ip, ip ?: "等待网络")
-                tvStatus.text = if (NetworkUtils.isNetworkAvailable(this@MainActivity)) {
-                    getString(R.string.waiting_connection)
-                } else {
-                    "等待网络连接"
+                tvStatus.text = when {
+                    !NetworkUtils.isNetworkAvailable(this@MainActivity) -> "等待网络连接"
+                    RuntimeState.serviceRunning -> getString(R.string.waiting_connection)
+                    else -> "接收服务正在启动"
                 }
                 updateIdentityInfo()
                 delay(2000)

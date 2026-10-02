@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:paddingLeft="34dp"
+    android:paddingTop="28dp"
+    android:paddingRight="38dp"
+    android:paddingBottom="28dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+        <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/nav_home" android:textColor="@color/text_primary" android:textSize="30sp" android:textStyle="bold" />
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="3dp" android:text="@string/home_subtitle" android:textColor="@color/text_secondary" android:textSize="14sp" />
+        </LinearLayout>
+        <TextView android:id="@+id/tv_status" android:layout_width="wrap_content" android:layout_height="wrap_content" android:background="@drawable/bg_status_chip" android:gravity="center" android:text="@string/waiting_connection" android:textColor="@color/success" android:textSize="15sp" android:textStyle="bold" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_marginTop="18dp"
+        android:layout_weight="1"
+        android:baselineAligned="false"
+        android:orientation="horizontal">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginRight="12dp"
+            android:layout_weight="1.25"
+            android:background="@drawable/bg_tv_hero"
+            android:orientation="vertical"
+            android:padding="24dp">
+            <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/receiver_online" android:textColor="@color/accent" android:textSize="12sp" android:textStyle="bold" />
+            <TextView android:id="@+id/tv_device_name" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="7dp" android:ellipsize="end" android:maxLines="1" android:textColor="@color/text_primary" android:textSize="31sp" android:textStyle="bold" tools:text="Living Room TV" />
+            <TextView android:id="@+id/tv_device_ip" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="5dp" android:textColor="@color/text_secondary" android:textSize="14sp" tools:text="Device IP: 192.168.1.100" />
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="15dp" android:gravity="center_vertical" android:orientation="horizontal">
+                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/connection_code_label" android:textColor="@color/text_muted" android:textSize="12sp" />
+                    <TextView android:id="@+id/tv_connection_code" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="2dp" android:letterSpacing="0.15" android:textColor="@color/accent" android:textSize="34sp" android:textStyle="bold" tools:text="ABC123" />
+                </LinearLayout>
+                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/work_mode" android:textColor="@color/text_muted" android:textSize="12sp" />
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginTop="5dp" android:text="@string/always_ready_mode" android:textColor="@color/text_primary" android:textSize="17sp" android:textStyle="bold" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <View android:layout_width="match_parent" android:layout_height="1dp" android:layout_marginTop="14dp" android:background="@color/divider" />
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_marginTop="14dp" android:layout_weight="1" android:gravity="center_vertical" android:orientation="horizontal">
+                <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_marginRight="18dp" android:layout_weight="1" android:orientation="vertical">
+                    <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/webui_quick_access" android:textColor="@color/blue_soft" android:textSize="12sp" android:textStyle="bold" />
+                    <TextView android:id="@+id/tv_webui_url" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:textColor="@color/text_primary" android:textIsSelectable="true" android:textSize="18sp" android:textStyle="bold" tools:text="http://192.168.1.100:18090" />
+                    <TextView android:id="@+id/tv_webui_port_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="6dp" android:textColor="@color/text_secondary" android:textSize="12sp" />
+                    <TextView android:id="@+id/tv_webui_token" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="5dp" android:textColor="@color/text_muted" android:textSize="11sp" />
+                </LinearLayout>
+                <com.weekd.miracastreceiver.ui.WebUiQrImageView android:layout_width="154dp" android:layout_height="154dp" android:background="@drawable/bg_qr_frame" android:contentDescription="@string/webui_qr_description" android:scaleType="fitCenter" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_marginLeft="12dp"
+            android:layout_weight="0.75"
+            android:orientation="vertical">
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:background="@drawable/bg_tv_panel" android:orientation="vertical" android:padding="20dp">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/home_protocol_status" android:textColor="@color/text_primary" android:textSize="19sp" android:textStyle="bold" />
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="14dp" android:orientation="horizontal"><TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="AirPlay" android:textColor="@color/text_secondary" android:textSize="15sp" /><TextView android:id="@+id/tv_home_airplay" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textStyle="bold" /></LinearLayout>
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:orientation="horizontal"><TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="DLNA / UPnP" android:textColor="@color/text_secondary" android:textSize="15sp" /><TextView android:id="@+id/tv_home_dlna" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textStyle="bold" /></LinearLayout>
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:orientation="horizontal"><TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Miracast / WFD" android:textColor="@color/text_secondary" android:textSize="15sp" /><TextView android:id="@+id/tv_home_miracast" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textStyle="bold" /></LinearLayout>
+                <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:orientation="horizontal"><TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="WebUI" android:textColor="@color/text_secondary" android:textSize="15sp" /><TextView android:id="@+id/tv_home_webui" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textStyle="bold" /></LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_marginTop="12dp" android:layout_weight="1" android:background="@drawable/bg_tv_panel" android:orientation="vertical" android:padding="20dp">
+                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/home_now_playing" android:textColor="@color/text_primary" android:textSize="19sp" android:textStyle="bold" />
+                <TextView android:id="@+id/tv_home_playback" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:textColor="@color/text_secondary" android:textSize="15sp" />
+                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:text="@string/home_player_hint" android:textColor="@color/text_muted" android:textSize="12sp" />
+            </LinearLayout>
+        </LinearLayout>
+    </LinearLayout>
+</LinearLayout>

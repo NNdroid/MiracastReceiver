@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>MiracastReceiver WebUI</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="login" class="modal hidden">
+    <div class="modal-card">
+      <h2>连接电视 WebUI</h2>
+      <p>输入电视主界面显示的 WebUI Token。</p>
+      <input id="tokenInput" type="password" autocomplete="off" placeholder="WebUI Token">
+      <button id="loginBtn" class="primary">连接</button>
+      <div id="loginError" class="error-text"></div>
+    </div>
+  </div>
+
+  <header>
+    <div>
+      <h1>MiracastReceiver</h1>
+      <p id="subtitle">Android TV 投屏接收管理中心</p>
+    </div>
+    <div class="header-actions">
+      <span id="connectionBadge" class="badge">连接中</span>
+      <button id="restartBtn">重载接收服务</button>
+    </div>
+  </header>
+
+  <div class="shell">
+    <nav>
+      <button class="nav active" data-page="overview">概览</button>
+      <button class="nav" data-page="protocols">协议与发现</button>
+      <button class="nav" data-page="playback">播放器</button>
+      <button class="nav" data-page="system">系统与后台</button>
+      <button class="nav" data-page="logs">日志</button>
+    </nav>
+
+    <main>
+      <section id="page-overview" class="page active">
+        <div class="grid cards">
+          <article class="card"><label>设备</label><strong id="deviceName">-</strong><span id="deviceMeta">-</span></article>
+          <article class="card"><label>IP / WebUI</label><strong id="deviceIp">-</strong><span id="webAddress">-</span></article>
+          <article class="card"><label>接收服务</label><strong id="serviceState">-</strong><span id="serviceUptime">-</span></article>
+          <article class="card"><label>播放状态</label><strong id="playbackState">-</strong><span id="playbackTitle">-</span></article>
+        </div>
+        <div class="grid two">
+          <article class="panel">
+            <h2>协议状态</h2>
+            <div class="status-list">
+              <div><span>AirPlay</span><b id="airplayState">-</b></div>
+              <div><span>Miracast</span><b id="miracastState">-</b></div>
+              <div><span>DLNA</span><b id="dlnaState">配置中</b></div>
+              <div><span>硬件解码</span><b id="decoderState">-</b></div>
+            </div>
+          </article>
+          <article class="panel">
+            <h2>特权状态</h2>
+            <div class="status-list">
+              <div><span>Magisk / Root</span><b id="rootState">-</b></div>
+              <div><span>Shizuku</span><b id="shizukuState">-</b></div>
+              <div><span>开机兜底</span><b id="bootState">-</b></div>
+              <div><span>最近错误</span><b id="lastError">无</b></div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="page-protocols" class="page">
+        <form id="configForm">
+          <article class="panel">
+            <h2>接收协议</h2>
+            <div class="switch-grid">
+              <label class="switch-row"><span><b>AirPlay</b><small>iPhone / iPad 镜像与媒体</small></span><input id="airPlayEnabled" type="checkbox"></label>
+              <label class="switch-row"><span><b>DLNA / UPnP</b><small>Emby、哔哩哔哩、优酷、爱奇艺等</small></span><input id="dlnaEnabled" type="checkbox"></label>
+              <label class="switch-row"><span><b>Miracast / WFD</b><small>Windows Win+K，无线显示器</small></span><input id="miracastEnabled" type="checkbox"></label>
+              <label class="switch-row"><span><b>自定义 mDNS</b><small>本项目自定义发现协议</small></span><input id="customMdnsEnabled" type="checkbox"></label>
+              <label class="switch-row"><span><b>AirPlay 音频</b><small>同步接收音频流</small></span><input id="airPlayAudioEnabled" type="checkbox"></label>
+              <label class="switch-row"><span><b>自动显示播放器</b><small>收到投屏后自动切到播放页面</small></span><input id="autoLaunchPlayer" type="checkbox"></label>
+            </div>
+          </article>
+
+          <article class="panel">
+            <h2>广播与画面</h2>
+            <div class="form-grid">
+              <label>设备名称<input id="deviceNameInput" type="text" maxlength="64" placeholder="留空使用 Android TV 系统名称"></label>
+              <label>镜像最大分辨率
+                <select id="mirrorMaxHeight">
+                  <option value="0">自动（电视最大分辨率）</option>
+                  <option value="720">720p</option><option value="1080">1080p</option>
+                  <option value="1440">1440p</option><option value="2160">2160p</option>
+                </select>
+              </label>
+              <label>DLNA / UPnP 端口<input id="upnpPort" type="number" min="1024" max="65535"></label>
+              <label>连接码<input id="connectionCode" type="text" readonly></label>
+            </div>
+            <div class="actions">
+              <button type="button" id="regenCodeBtn">重新生成连接码</button>
+              <button type="submit" class="primary">保存并应用</button>
+            </div>
+          </article>
+        </form>
+      </section>
+
+      <section id="page-playback" class="page">
+        <article class="panel">
+          <h2>正在播放</h2>
+          <div class="now-playing"><strong id="nowTitle">当前没有播放</strong><span id="nowSource">-</span></div>
+          <div class="progress"><div id="progressFill"></div></div>
+          <div id="progressText" class="muted">00:00 / 00:00</div>
+          <div class="player-buttons">
+            <button data-player="pause">暂停</button><button class="primary" data-player="play">播放</button><button data-player="stop">停止</button>
+          </div>
+          <div class="form-grid compact">
+            <label>跳转到（秒）<input id="seekSeconds" type="number" min="0" value="0"></label>
+            <label>音量（0-100）<input id="volumeValue" type="number" min="0" max="100" value="100"></label>
+            <label>速度<input id="speedValue" type="number" min="0.25" max="4" step="0.25" value="1"></label>
+          </div>
+          <div class="actions">
+            <button id="seekBtn">跳转</button><button id="volumeBtn">设置音量</button><button id="speedBtn">设置速度</button>
+          </div>
+          <div class="status-list top-gap">
+            <div><span>解码器</span><b id="activeDecoder">-</b></div>
+            <div><span>硬件加速</span><b id="activeHardware">-</b></div>
+          </div>
+        </article>
+      </section>
+
+      <section id="page-system" class="page">
+        <form id="systemForm">
+          <article class="panel">
+            <h2>WebUI 与后台</h2>
+            <div class="switch-grid">
+              <label class="switch-row"><span><b>启用 WebUI</b><small>在局域网开放管理页面</small></span><input id="webUiEnabled" type="checkbox"></label>
+              <label class="switch-row"><span><b>WebUI Token 验证</b><small>建议始终开启</small></span><input id="webUiAuthRequired" type="checkbox"></label>
+              <label class="switch-row"><span><b>开机自动启动</b><small>BootReceiver + Magisk service.d</small></span><input id="autoStartOnBoot" type="checkbox"></label>
+            </div>
+            <div class="form-grid">
+              <label>WebUI 端口<input id="webUiPort" type="number" min="1024" max="65535"></label>
+            </div>
+            <div class="actions">
+              <button type="button" id="optimizeBtn">执行后台优化</button>
+              <button type="button" id="rotateTokenBtn">轮换 WebUI Token</button>
+              <button type="submit" class="primary">保存并应用</button>
+            </div>
+          </article>
+        </form>
+        <article class="panel">
+          <h2>诊断</h2>
+          <pre id="diagnostics">加载中…</pre>
+        </article>
+      </section>
+
+      <section id="page-logs" class="page">
+        <article class="panel log-panel">
+          <div class="panel-head"><h2>实时日志</h2><div><button id="refreshLogsBtn">刷新</button><button id="clearLogsBtn">清空</button></div></div>
+          <pre id="logs">加载中…</pre>
+        </article>
+      </section>
+
+      <div id="toast" class="toast hidden"></div>
+    </main>
+  </div>
+  <script src="/app.js"></script>
+</body>
+</html>

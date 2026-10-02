@@ -1,4 +1,4 @@
-﻿package com.weekd.miracastreceiver.airplay
+package com.weekd.miracastreceiver.airplay
 
 import com.weekd.miracastreceiver.airplay.handshake.FairPlay
 import com.weekd.miracastreceiver.airplay.handshake.InfoResponder
@@ -6,6 +6,7 @@ import com.weekd.miracastreceiver.airplay.handshake.PairingKeys
 import com.weekd.miracastreceiver.airplay.handshake.PairingSession
 import com.weekd.miracastreceiver.airplay.handshake.PlistCodec
 import com.weekd.miracastreceiver.util.Logger
+import com.weekd.miracastreceiver.utils.PortUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.isActive
@@ -169,10 +170,7 @@ open class RtspHandler(
         repeat(BIND_MAX_ATTEMPTS) { attempt ->
             if (!running) throw java.io.IOException("RTSP server stopped before bind")
             try {
-                return ServerSocket().apply {
-                    reuseAddress = true
-                    bind(java.net.InetSocketAddress(RTSP_PORT))
-                }
+                return PortUtils.bindFixedServerSocket(RTSP_PORT)
             } catch (e: java.io.IOException) {
                 lastError = e
                 Logger.w("RTSP port $RTSP_PORT busy (attempt ${attempt + 1}/$BIND_MAX_ATTEMPTS) — retrying in ${BIND_RETRY_MS}ms")

@@ -32,7 +32,7 @@ object PortUtils {
         repeat(RANDOM_ATTEMPTS) {
             val candidate = randomHighPort()
             if (candidate !in excludedPorts && isTcpPortAvailable(candidate)) {
-                Timber.w("Preferred WebUI port $preferredPort is unavailable; selected fallback port $candidate")
+                Timber.w("Preferred TCP port $preferredPort is unavailable; selected fallback port $candidate")
                 return candidate
             }
         }
@@ -50,20 +50,22 @@ object PortUtils {
             ?: throw java.io.IOException("Unable to bind TCP port $port on IPv4/IPv6")
 
     /**
-     * Bind a logical server socket that is reachable through both IPv4 and IPv6 whenever the
-     * platform supports them.
-     *
-     * Android vendor kernels differ in the default value of IPV6_V6ONLY. Binding only 0.0.0.0
-     * makes IPv6 URLs dead; binding only :: can make IPv4 dead on v6-only sockets. We therefore:
-     *  1. preflight IPv4 availability for the candidate port;
-     *  2. bind :: first;
-     *  3. bind 0.0.0.0 to the same port as well when the IPv6 socket is v6-only;
-     *  4. if the IPv4 bind becomes EADDRINUSE only after :: was bound, treat the IPv6 socket as a
-     *     dual-stack listener (the common Linux/Android behavior with IPV6_V6ONLY=0).
-     *
-     * The returned ServerSocket multiplexes accepts from both physical sockets, so existing server
-     * code can keep a single accept loop.
+     * Allocate an OS-selected high port and then bind it through the same deterministic dual-stack
+     * path used by fixed listeners. AirPlay 2 uses several SETUP-negotiated ephemeral TCP ports;
+     * returning an IPv4-only ephemeral listener while RTSP arrived over IPv6 makes the sender fail
+     * immediately after a successful handshake.
      */
+    fun bindEphemeralServerSocket(backlog: Int = 50): ServerSocket {
+        repeat(RANDOM_ATTEMPTS) {
+            val candidate = ServerSocket(0).use { it.localPort }
+            if (candidate >= 1024) {
+                tryBindDualStack(candidate, backlog)?.let { return it }
+            }
+        }
+        throw java.io.IOException("Unable to allocate a dual-stack ephemeral TCP port")
+    }
+
+    /** Bind an available port, preserving the caller's preferred/fallback order. */
     fun bindAvailableServerSocket(
         preferredPort: Int,
         fallbackPort: Int? = null,
@@ -113,15 +115,11 @@ object PortUtils {
     private fun tryBindDualStack(port: Int, backlog: Int): ServerSocket? {
         if (port !in 1024..65535) return null
 
-        // Reject ports that were already occupied on IPv4 before we touched IPv6. This lets us
-        // distinguish a real conflict from the normal case where a dual-stack :: socket claims
-        // the IPv4 wildcard after it is bound.
         val ipv4WasAvailable = tryBindIpv4(port, 1)?.use { true } ?: false
         if (!ipv4WasAvailable) return null
 
         val ipv6 = tryBind(IPV6_WILDCARD, port, backlog)
         val ipv4 = tryBindIpv4(port, backlog)
-
         if (ipv6 == null && ipv4 == null) return null
 
         val physicalSockets = listOfNotNull(ipv6, ipv4)

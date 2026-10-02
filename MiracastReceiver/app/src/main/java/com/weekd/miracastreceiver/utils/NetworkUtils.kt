@@ -1,26 +1,29 @@
 package com.weekd.miracastreceiver.utils
 
 import android.content.Context
-import android.os.Build
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
+import android.os.Build
 import timber.log.Timber
 import java.net.Inet4Address
 import java.net.NetworkInterface
+import java.security.SecureRandom
 
-/**
- * 网络工具类
- */
+/** Network helpers for LAN discovery/casting. */
 object NetworkUtils {
 
-    /**
-     * 检查网络是否连接。
-     *
-     * `activeNetwork` / `getNetworkCapabilities` 是 API 23 起才有的，而 minSdk 是 21 ——
-     * 在 Android 5.x 上直接调用会 NoSuchMethodError，且这两个方法在应用启动路径上，
-     * 结果就是一装上就闪退。低版本回退到已废弃但一直可用的 activeNetworkInfo。
-     */
+    @Volatile
+    private var appContext: Context? = null
+
+    private val secureRandom = SecureRandom()
+
+    /** Initialize once from Application so no-context protocol code can resolve the active LAN. */
+    fun initialize(context: Context) {
+        appContext = context.applicationContext
+    }
+
     fun isNetworkAvailable(context: Context): Boolean {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             ?: return false
@@ -28,16 +31,15 @@ object NetworkUtils {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val network = cm.activeNetwork ?: return false
             val capabilities = cm.getNetworkCapabilities(network) ?: return false
-            return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+            return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) ||
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
         }
 
         @Suppress("DEPRECATION")
         return cm.activeNetworkInfo?.isConnected == true
     }
 
-    /**
-     * 检查是否连接到 Wi-Fi。低版本同样回退到废弃 API，原因见 [isNetworkAvailable]。
-     */
     fun isWifiConnected(context: Context): Boolean {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             ?: return false
@@ -53,93 +55,176 @@ object NetworkUtils {
     }
 
     /**
-     * 获取本机 IP 地址
+     * Resolve the IPv4 address used by the real LAN (Ethernet/Wi-Fi), not whichever interface the
+     * kernel happens to enumerate first. This is important while Miracast creates p2p0 and on TVs
+     * that also run VPN/tun/WireGuard interfaces.
      */
     fun getLocalIpAddress(): String? {
-        try {
-            val interfaces = NetworkInterface.getNetworkInterfaces()
-            while (interfaces.hasMoreElements()) {
-                val networkInterface = interfaces.nextElement()
-                val addresses = networkInterface.inetAddresses
-
-                while (addresses.hasMoreElements()) {
-                    val address = addresses.nextElement()
-
-                    // 只返回 IPv4 地址，排除回环地址
-                    if (!address.isLoopbackAddress && address is Inet4Address) {
-                        val ip = address.hostAddress
-                        Timber.d("Found IP address: $ip")
-                        return ip
-                    }
-                }
+        val context = appContext
+        if (context != null) {
+            activeLanAddress(context)?.let {
+                Timber.d("Active LAN IP address: $it")
+                return it
             }
-        } catch (e: Exception) {
-            Timber.e(e, "Error getting local IP address")
         }
-        return null
+
+        return fallbackLanAddress()?.also { Timber.d("Fallback LAN IP address: $it") }
     }
 
-    /**
-     * 获取 Wi-Fi SSID
-     */
+    private fun activeLanAddress(context: Context): String? {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return null
+
+        return try {
+            val networks = mutableListOf<Network>()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                cm.activeNetwork?.let { networks += it }
+            }
+            cm.allNetworks.forEach { network ->
+                if (network !in networks) networks += network
+            }
+
+            for (network in networks) {
+                val capabilities = cm.getNetworkCapabilities(network) ?: continue
+                val isLan = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ||
+                    capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                if (!isLan || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue
+
+                val address = cm.getLinkProperties(network)
+                    ?.linkAddresses
+                    ?.asSequence()
+                    ?.map { it.address }
+                    ?.filterIsInstance<Inet4Address>()
+                    ?.firstOrNull { isUsableIpv4(it) }
+                    ?.hostAddress
+                if (!address.isNullOrBlank()) return address
+            }
+            null
+        } catch (e: Exception) {
+            Timber.w(e, "Unable to resolve active LAN address")
+            null
+        }
+    }
+
+    private fun fallbackLanAddress(): String? = try {
+        val interfaces = NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
+            .filter { iface ->
+                runCatching { iface.isUp && !iface.isLoopback }.getOrDefault(false) &&
+                    !isExcludedInterface(iface.name)
+            }
+            .sortedWith(compareBy<NetworkInterface> { interfacePriority(it.name) }.thenBy { it.name })
+
+        interfaces.firstNotNullOfOrNull { iface ->
+            iface.inetAddresses.toList()
+                .filterIsInstance<Inet4Address>()
+                .firstOrNull { isUsableIpv4(it) }
+                ?.hostAddress
+        }
+    } catch (e: Exception) {
+        Timber.e(e, "Error getting local LAN IP address")
+        null
+    }
+
+    private fun isUsableIpv4(address: Inet4Address): Boolean =
+        !address.isLoopbackAddress && !address.isLinkLocalAddress && !address.isMulticastAddress
+
+    private fun isExcludedInterface(name: String): Boolean {
+        val n = name.lowercase()
+        return n.startsWith("p2p") ||
+            n.startsWith("tun") ||
+            n.startsWith("tap") ||
+            n.startsWith("wg") ||
+            n.startsWith("zt") ||
+            n.startsWith("vti") ||
+            n.startsWith("ipsec") ||
+            n.startsWith("dummy") ||
+            n.startsWith("clat") ||
+            n.startsWith("rmnet")
+    }
+
+    private fun interfacePriority(name: String): Int {
+        val n = name.lowercase()
+        return when {
+            n.startsWith("eth") || n.startsWith("en") -> 0
+            n.startsWith("wlan") || n.startsWith("wifi") -> 1
+            else -> 10
+        }
+    }
+
     fun getWifiSSID(context: Context): String? {
-        try {
+        return try {
+            @Suppress("DEPRECATION")
             val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            val wifiInfo = wifiManager.connectionInfo
-            return wifiInfo.ssid?.replace("\"", "")
+            @Suppress("DEPRECATION")
+            wifiManager.connectionInfo.ssid?.replace("\"", "")
         } catch (e: Exception) {
             Timber.e(e, "Error getting WiFi SSID")
+            null
         }
-        return null
     }
 
-    /**
-     * 生成随机连接码
-     */
     fun generateConnectionCode(): String {
         val chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        return (1..6)
-            .map { chars.random() }
-            .joinToString("")
+        return buildString(6) {
+            repeat(6) { append(chars[secureRandom.nextInt(chars.length)]) }
+        }
     }
 
-    /**
-     * 获取设备 MAC 地址（用于 AirPlay）
-     */
+    /** Get a physical LAN MAC for AirPlay identity, avoiding p2p/VPN interfaces. */
     fun getMacAddress(): String {
         try {
-            val interfaces = NetworkInterface.getNetworkInterfaces()
-            while (interfaces.hasMoreElements()) {
-                val networkInterface = interfaces.nextElement()
+            val preferredName = appContext?.let { activeLanInterfaceName(it) }
+            val candidates = buildList {
+                if (!preferredName.isNullOrBlank()) {
+                    NetworkInterface.getByName(preferredName)?.let { add(it) }
+                }
+                NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
+                    .filter { !isExcludedInterface(it.name) && it !in this }
+                    .sortedWith(compareBy<NetworkInterface> { interfacePriority(it.name) }.thenBy { it.name })
+                    .forEach { add(it) }
+            }
 
-                // 跳过回环接口
-                if (networkInterface.isLoopback) continue
-
-                // 获取硬件地址
-                val mac = networkInterface.hardwareAddress
-                if (mac != null && mac.isNotEmpty()) {
+            for (networkInterface in candidates) {
+                if (runCatching { networkInterface.isLoopback || !networkInterface.isUp }.getOrDefault(true)) continue
+                val mac = runCatching { networkInterface.hardwareAddress }.getOrNull()
+                if (!mac.isNullOrEmpty()) {
                     val macAddress = mac.joinToString(":") {
-                        String.format("%02X", it)
+                        String.format("%02X", it.toInt() and 0xFF)
                     }
-                    Timber.d("Found MAC address: $macAddress")
+                    Timber.d("Found LAN MAC address on ${networkInterface.name}: $macAddress")
                     return macAddress
                 }
             }
         } catch (e: Exception) {
-            Timber.e(e, "Error getting MAC address")
+            Timber.e(e, "Error getting LAN MAC address")
         }
 
-        // 如果获取失败，生成一个随机 MAC 地址
         return generateRandomMacAddress()
     }
 
-    /**
-     * 生成随机 MAC 地址
-     */
+    private fun activeLanInterfaceName(context: Context): String? {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            ?: return null
+        return try {
+            val networks = mutableListOf<Network>()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) cm.activeNetwork?.let { networks += it }
+            cm.allNetworks.forEach { if (it !in networks) networks += it }
+            networks.firstNotNullOfOrNull { network ->
+                val caps = cm.getNetworkCapabilities(network) ?: return@firstNotNullOfOrNull null
+                val isLan = caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ||
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                if (!isLan || caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) null
+                else cm.getLinkProperties(network)?.interfaceName
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     private fun generateRandomMacAddress(): String {
-        val mac = ByteArray(6) { (0..255).random().toByte() }
-        // 设置本地管理位
-        mac[0] = (mac[0].toInt() or 0x02).toByte()
-        return mac.joinToString(":") { String.format("%02X", it) }
+        val mac = ByteArray(6)
+        secureRandom.nextBytes(mac)
+        mac[0] = ((mac[0].toInt() or 0x02) and 0xFE).toByte()
+        return mac.joinToString(":") { String.format("%02X", it.toInt() and 0xFF) }
     }
 }

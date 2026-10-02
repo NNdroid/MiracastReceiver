@@ -23,4 +23,23 @@
     <color name="hero_stroke">#B9CBE3</color>
     <color name="status_chip_bg">#DFF5EA</color>
     <color name="status_chip_stroke">#7FC8A9</color>
+
+    <!-- Player OSD: light/day theme. The video surface itself always remains black. -->
+    <color name="player_text_primary">#142033</color>
+    <color name="player_text_secondary">#53647A</color>
+    <color name="player_surface">#F2FFFFFF</color>
+    <color name="player_surface_strong">#FAFFFFFF</color>
+    <color name="player_surface_subtle">#D9F4F7FB</color>
+    <color name="player_border">#A8C8D5E5</color>
+    <color name="player_button_idle">#E8FFFFFF</color>
+    <color name="player_button_focused">#FFFFFFFF</color>
+    <color name="player_button_pressed">#D8E2F4ED</color>
+    <color name="player_scrim_top">#F2F7FAFC</color>
+    <color name="player_scrim_bottom">#F7F7FAFC</color>
+    <color name="player_scrim_clear">#00F7FAFC</color>
+    <color name="player_buffered">#8A6E7F91</color>
+    <color name="player_unplayed">#5A718096</color>
+    <color name="player_status_bg">#E6DFF5EA</color>
+    <color name="player_status_text">#087858</color>
+    <color name="player_error_bg">#F5FFF4F5</color>
 </resources>

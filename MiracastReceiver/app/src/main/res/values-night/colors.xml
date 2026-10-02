@@ -23,4 +23,23 @@
     <color name="hero_stroke">#36506E</color>
     <color name="status_chip_bg">#17382E</color>
     <color name="status_chip_stroke">#3D9B79</color>
+
+    <!-- Player OSD: dark/night theme. -->
+    <color name="player_text_primary">#F8FAFC</color>
+    <color name="player_text_secondary">#BAC7D8</color>
+    <color name="player_surface">#D916202E</color>
+    <color name="player_surface_strong">#F0141C28</color>
+    <color name="player_surface_subtle">#C90D1520</color>
+    <color name="player_border">#70536A84</color>
+    <color name="player_button_idle">#8F182333</color>
+    <color name="player_button_focused">#E024344B</color>
+    <color name="player_button_pressed">#D92B6552</color>
+    <color name="player_scrim_top">#EA05080D</color>
+    <color name="player_scrim_bottom">#F205080D</color>
+    <color name="player_scrim_clear">#0005080D</color>
+    <color name="player_buffered">#9AB4C1D1</color>
+    <color name="player_unplayed">#526C7B8D</color>
+    <color name="player_status_bg">#C917382E</color>
+    <color name="player_status_text">#62E8B0</color>
+    <color name="player_error_bg">#E6211219</color>
 </resources>

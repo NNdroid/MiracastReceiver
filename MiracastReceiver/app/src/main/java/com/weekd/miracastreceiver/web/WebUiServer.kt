@@ -61,18 +61,13 @@ class WebUiServer(
         RuntimeState.webUiPort = actualPort
         AppSettings.setWebUiLastBoundPort(appContext, actualPort)
 
-        if (actualPort == port) {
-            Timber.i("WebUI started on preferred port 0.0.0.0:$actualPort")
-        } else {
-            Timber.w("WebUI preferred port $port occupied; using runtime fallback 0.0.0.0:$actualPort")
-        }
+        if (actualPort == port) Timber.i("WebUI started on preferred port 0.0.0.0:$actualPort")
+        else Timber.w("WebUI preferred port $port occupied; using runtime fallback 0.0.0.0:$actualPort")
 
         acceptJob = scope.launch {
             try {
                 while (isActive && !socket.isClosed) {
-                    val client = try {
-                        socket.accept()
-                    } catch (e: SocketException) {
+                    val client = try { socket.accept() } catch (e: SocketException) {
                         if (!socket.isClosed) Timber.w(e, "WebUI accept failed")
                         break
                     }
@@ -80,21 +75,13 @@ class WebUiServer(
                         runCatching {
                             client.use {
                                 it.soTimeout = 1_000
-                                sendJson(
-                                    it.getOutputStream(),
-                                    503,
-                                    JSONObject().put("error", "too_many_connections")
-                                )
+                                sendJson(it.getOutputStream(), 503, JSONObject().put("error", "too_many_connections"))
                             }
                         }
                         continue
                     }
                     launch {
-                        try {
-                            handleClient(client)
-                        } finally {
-                            clientSlots.release()
-                        }
+                        try { handleClient(client) } finally { clientSlots.release() }
                     }
                 }
             } catch (e: Exception) {
@@ -142,16 +129,13 @@ class WebUiServer(
                     if (headerBytes > MAX_HEADER_BYTES) return sendText(output, 431, "Headers Too Large")
                     val separator = line.indexOf(':')
                     if (separator > 0) {
-                        headers[line.substring(0, separator).trim().lowercase()] =
-                            line.substring(separator + 1).trim()
+                        headers[line.substring(0, separator).trim().lowercase()] = line.substring(separator + 1).trim()
                     }
                 }
 
                 val contentLength = headers["content-length"]?.toIntOrNull()?.coerceAtLeast(0) ?: 0
                 if (contentLength > MAX_BODY_BYTES) return sendText(output, 413, "Payload Too Large")
-                val body = if (contentLength > 0) {
-                    String(readExact(input, contentLength), StandardCharsets.UTF_8)
-                } else ""
+                val body = if (contentLength > 0) String(readExact(input, contentLength), StandardCharsets.UTF_8) else ""
 
                 if (path.startsWith("/api/") && path != "/api/ping" && !isAuthorized(headers)) {
                     return sendJson(output, 401, JSONObject().put("error", "unauthorized"))
@@ -167,6 +151,7 @@ class WebUiServer(
                         JSONObject()
                             .put("ok", true)
                             .put("authRequired", AppSettings.isWebUiAuthRequired(appContext))
+                            .put("authMode", AppSettings.getWebUiAuthMode(appContext))
                             .put("port", RuntimeState.webUiPort.takeIf { it > 0 } ?: AppSettings.getWebUiPort(appContext))
                             .put("preferredPort", AppSettings.getWebUiPort(appContext))
                     )
@@ -194,24 +179,18 @@ class WebUiServer(
                         onReconfigureRequested("connection code changed")
                     }
                     method == "POST" && path == "/api/actions/rotate-token" -> {
-                        val token = AppSettings.regenerateWebUiToken(appContext)
-                        sendJson(output, 200, JSONObject().put("ok", true).put("token", token))
+                        if (AppSettings.getWebUiAuthMode(appContext) == AppSettings.WEB_UI_AUTH_CUSTOM) {
+                            sendJson(output, 400, JSONObject().put("error", "custom_token_managed_in_config"))
+                        } else {
+                            val token = AppSettings.regenerateWebUiToken(appContext)
+                            sendJson(output, 200, JSONObject().put("ok", true).put("token", token))
+                        }
                     }
                     method == "POST" && path == "/api/actions/background-optimize" -> {
-                        val result = PrivilegedAccess.applyBackgroundOptimizations(
-                            appContext,
-                            installBootScript = AppSettings.isAutoStartOnBoot(appContext)
-                        )
-                        sendJson(
-                            output,
-                            200,
-                            JSONObject()
-                                .put("ok", result.success)
-                                .put("channel", result.privilegedChannel)
-                                .put("succeeded", result.succeeded)
-                                .put("attempted", result.attempted)
-                                .put("bootScriptInstalled", result.bootScriptInstalled)
-                        )
+                        val result = PrivilegedAccess.applyBackgroundOptimizations(appContext, AppSettings.isAutoStartOnBoot(appContext))
+                        sendJson(output, 200, JSONObject().put("ok", result.success).put("channel", result.privilegedChannel)
+                            .put("succeeded", result.succeeded).put("attempted", result.attempted)
+                            .put("bootScriptInstalled", result.bootScriptInstalled))
                     }
                     method == "POST" && path == "/api/logs/clear" -> {
                         WebLogBuffer.clear()
@@ -231,21 +210,28 @@ class WebUiServer(
             return sendJson(output, 400, JSONObject().put("error", "invalid_json"))
         }
 
-        val requestedWebPort = if (json.has("webUiPort")) {
-            json.optInt("webUiPort", AppSettings.getWebUiPort(appContext))
-        } else AppSettings.getWebUiPort(appContext)
-        val requestedUpnpPort = if (json.has("upnpPort")) {
-            json.optInt("upnpPort", AppSettings.DEFAULT_UPNP_PORT)
-        } else AppSettings.getUpnpPort(appContext)
-        val requestedWebEnabled = if (json.has("webUiEnabled")) {
-            json.optBoolean("webUiEnabled", true)
-        } else AppSettings.isWebUiEnabled(appContext)
+        val requestedWebPort = if (json.has("webUiPort")) json.optInt("webUiPort", AppSettings.getWebUiPort(appContext)) else AppSettings.getWebUiPort(appContext)
+        val requestedUpnpPort = if (json.has("upnpPort")) json.optInt("upnpPort", AppSettings.DEFAULT_UPNP_PORT) else AppSettings.getUpnpPort(appContext)
+        val requestedWebEnabled = if (json.has("webUiEnabled")) json.optBoolean("webUiEnabled", true) else AppSettings.isWebUiEnabled(appContext)
+        val requestedAuthMode = when {
+            json.has("webUiAuthMode") -> json.optString("webUiAuthMode", AppSettings.WEB_UI_AUTH_AUTO).lowercase()
+            json.has("webUiAuthRequired") -> if (json.optBoolean("webUiAuthRequired", true)) AppSettings.WEB_UI_AUTH_AUTO else AppSettings.WEB_UI_AUTH_NONE
+            else -> AppSettings.getWebUiAuthMode(appContext)
+        }
+        val requestedCustomToken = if (json.has("webUiCustomToken")) json.optString("webUiCustomToken", "").trim() else AppSettings.getWebUiCustomToken(appContext)
 
         if (requestedWebPort !in 1024..65535 || requestedUpnpPort !in 1024..65535) {
             return sendJson(output, 400, JSONObject().put("error", "port_out_of_range"))
         }
         if (requestedWebPort == requestedUpnpPort) {
             return sendJson(output, 400, JSONObject().put("error", "webui_and_upnp_ports_must_differ"))
+        }
+        if (requestedAuthMode !in setOf(AppSettings.WEB_UI_AUTH_NONE, AppSettings.WEB_UI_AUTH_AUTO, AppSettings.WEB_UI_AUTH_CUSTOM)) {
+            return sendJson(output, 400, JSONObject().put("error", "invalid_auth_mode"))
+        }
+        if (requestedAuthMode == AppSettings.WEB_UI_AUTH_CUSTOM && !AppSettings.isValidCustomToken(requestedCustomToken.orEmpty())) {
+            return sendJson(output, 400, JSONObject().put("error", "invalid_custom_token")
+                .put("minLength", AppSettings.MIN_CUSTOM_TOKEN_LENGTH).put("maxLength", AppSettings.MAX_CUSTOM_TOKEN_LENGTH))
         }
 
         val reconnectPort = predictReconnectPort(requestedWebPort, requestedWebEnabled)
@@ -260,25 +246,20 @@ class WebUiServer(
         if (json.has("upnpPort")) AppSettings.setUpnpPort(appContext, requestedUpnpPort)
         if (json.has("webUiEnabled")) AppSettings.setWebUiEnabled(appContext, requestedWebEnabled)
         if (json.has("webUiPort")) AppSettings.setWebUiPort(appContext, requestedWebPort)
-        if (json.has("webUiAuthRequired")) AppSettings.setWebUiAuthRequired(appContext, json.optBoolean("webUiAuthRequired", true))
+        if (json.has("webUiAuthMode") || json.has("webUiAuthRequired")) {
+            runCatching { AppSettings.setWebUiAuthMode(appContext, requestedAuthMode, requestedCustomToken) }.getOrElse {
+                return sendJson(output, 400, JSONObject().put("error", it.message ?: "invalid_auth_config"))
+            }
+        }
         if (json.has("autoStartOnBoot")) {
             val enabled = json.optBoolean("autoStartOnBoot", true)
             AppSettings.setAutoStartOnBoot(appContext, enabled)
-            if (enabled) PrivilegedAccess.installMagiskBootScript(appContext)
-            else PrivilegedAccess.removeMagiskBootScript()
+            if (enabled) PrivilegedAccess.installMagiskBootScript(appContext) else PrivilegedAccess.removeMagiskBootScript()
         }
-        if (json.has("deviceName")) {
-            AppSettings.setDeviceNameOverride(appContext, json.optString("deviceName", ""))
-        }
+        if (json.has("deviceName")) AppSettings.setDeviceNameOverride(appContext, json.optString("deviceName", ""))
 
-        sendJson(
-            output,
-            200,
-            JSONObject()
-                .put("ok", true)
-                .put("config", buildConfig())
-                .put("reconnectPort", reconnectPort)
-        )
+        val activeToken = if (AppSettings.isWebUiAuthRequired(appContext)) AppSettings.getOrCreateWebUiToken(appContext) else ""
+        sendJson(output, 200, JSONObject().put("ok", true).put("config", buildConfig()).put("reconnectPort", reconnectPort).put("activeToken", activeToken))
         onReconfigureRequested("WebUI configuration changed")
     }
 
@@ -292,20 +273,11 @@ class WebUiServer(
     }
 
     private fun handleOpenUrl(output: OutputStream, body: String) {
-        val json = runCatching { JSONObject(body) }.getOrElse {
-            return sendJson(output, 400, JSONObject().put("error", "invalid_json"))
-        }
+        val json = runCatching { JSONObject(body) }.getOrElse { return sendJson(output, 400, JSONObject().put("error", "invalid_json")) }
         val headerObject = json.optJSONObject("headers")
         val rawHeaders = linkedMapOf<String, String>()
         headerObject?.keys()?.forEach { key -> rawHeaders[key] = headerObject.optString(key) }
-
-        val request = runCatching {
-            MediaUrlRequest.parse(
-                url = json.optString("url"),
-                title = json.optString("title"),
-                headers = rawHeaders
-            )
-        }.getOrElse {
+        val request = runCatching { MediaUrlRequest.parse(json.optString("url"), json.optString("title"), rawHeaders) }.getOrElse {
             return sendJson(output, 400, JSONObject().put("error", it.message ?: "invalid_media_request"))
         }
 
@@ -322,46 +294,20 @@ class WebUiServer(
             RuntimeState.lastError = "URL playback launch failed: $error"
             return sendJson(output, 500, JSONObject().put("error", "player_launch_failed").put("detail", error))
         }
-
-        RuntimeState.updatePlayback {
-            it.copy(
-                state = "LAUNCHING",
-                title = request.title.ifBlank { request.url },
-                uri = request.url,
-                source = "WEB_URL",
-                error = "",
-                retryAttempt = 0
-            )
-        }
-        sendJson(
-            output,
-            200,
-            JSONObject()
-                .put("ok", true)
-                .put("url", request.url)
-                .put("title", request.title)
-                .put("headerCount", request.headers.size)
-        )
+        RuntimeState.updatePlayback { it.copy(state = "LAUNCHING", title = request.title.ifBlank { request.url }, uri = request.url, source = "WEB_URL", error = "", retryAttempt = 0) }
+        sendJson(output, 200, JSONObject().put("ok", true).put("url", request.url).put("title", request.title).put("headerCount", request.headers.size))
     }
 
     private fun handlePlayerAction(output: OutputStream, body: String) {
-        val json = runCatching { JSONObject(body) }.getOrElse {
-            return sendJson(output, 400, JSONObject().put("error", "invalid_json"))
-        }
+        val json = runCatching { JSONObject(body) }.getOrElse { return sendJson(output, 400, JSONObject().put("error", "invalid_json")) }
         val action = json.optString("action").lowercase()
         val intent = when (action) {
             "play" -> Intent(PlayerActivity.ACTION_PLAY)
             "pause" -> Intent(PlayerActivity.ACTION_PAUSE)
             "stop" -> Intent(PlayerActivity.ACTION_STOP)
-            "seek" -> Intent(PlayerActivity.ACTION_SEEK).apply {
-                putExtra(PlayerActivity.EXTRA_SEEK_POSITION, json.optLong("positionMs", 0L).coerceAtLeast(0L))
-            }
-            "volume" -> Intent(PlayerActivity.ACTION_SET_VOLUME).apply {
-                putExtra(PlayerActivity.EXTRA_VOLUME, json.optInt("value", 50).coerceIn(0, 100))
-            }
-            "speed" -> Intent(PlayerActivity.ACTION_SET_SPEED).apply {
-                putExtra(PlayerActivity.EXTRA_SPEED, json.optDouble("value", 1.0).toFloat().coerceIn(0.25f, 4f))
-            }
+            "seek" -> Intent(PlayerActivity.ACTION_SEEK).apply { putExtra(PlayerActivity.EXTRA_SEEK_POSITION, json.optLong("positionMs", 0L).coerceAtLeast(0L)) }
+            "volume" -> Intent(PlayerActivity.ACTION_SET_VOLUME).apply { putExtra(PlayerActivity.EXTRA_VOLUME, json.optInt("value", 50).coerceIn(0, 100)) }
+            "speed" -> Intent(PlayerActivity.ACTION_SET_SPEED).apply { putExtra(PlayerActivity.EXTRA_SPEED, json.optDouble("value", 1.0).toFloat().coerceIn(0.25f, 4f)) }
             else -> return sendJson(output, 400, JSONObject().put("error", "unsupported_player_action"))
         }
         intent.setPackage(appContext.packageName)
@@ -377,76 +323,27 @@ class WebUiServer(
         val preferredPort = AppSettings.getWebUiPort(appContext)
         val runtimePort = RuntimeState.webUiPort.takeIf { it > 0 } ?: AppSettings.getWebUiLastBoundPort(appContext) ?: preferredPort
         return JSONObject()
-            .put("app", JSONObject()
-                .put("version", BuildConfig.VERSION_NAME)
-                .put("versionCode", BuildConfig.VERSION_CODE)
-                .put("debug", BuildConfig.DEBUG))
-            .put("device", JSONObject()
-                .put("name", deviceInfo.getDeviceName())
-                .put("id", deviceInfo.getDeviceId())
-                .put("manufacturer", Build.MANUFACTURER)
-                .put("model", Build.MODEL)
-                .put("android", Build.VERSION.RELEASE)
-                .put("sdk", Build.VERSION.SDK_INT)
-                .put("ip", NetworkUtils.getLocalIpAddress().orEmpty()))
-            .put("webui", JSONObject()
-                .put("port", runtimePort)
-                .put("preferredPort", preferredPort)
-                .put("fallback", runtimePort != preferredPort)
-                .put("authRequired", AppSettings.isWebUiAuthRequired(appContext)))
-            .put("service", JSONObject()
-                .put("running", RuntimeState.serviceRunning)
-                .put("startedAtMs", RuntimeState.serviceStartedAtMs)
-                .put("uptimeMs", if (RuntimeState.serviceStartedAtMs > 0) now - RuntimeState.serviceStartedAtMs else 0)
-                .put("lastError", RuntimeState.lastError))
-            .put("airplay", JSONObject()
-                .put("state", RuntimeState.airPlayState)
-                .put("sender", RuntimeState.airPlaySender))
-            .put("miracast", JSONObject()
-                .put("state", RuntimeState.miracastState)
-                .put("client", RuntimeState.miracastClient)
-                .put("rtpPort", RuntimeState.miracastRtpPort))
-            .put("playback", JSONObject()
-                .put("state", playback.state)
-                .put("title", playback.title)
-                .put("uri", playback.uri)
-                .put("positionMs", playback.positionMs)
-                .put("durationMs", playback.durationMs)
-                .put("speed", playback.speed.toDouble())
-                .put("volume", playback.volume)
-                .put("source", playback.source)
-                .put("error", playback.error)
-                .put("retryAttempt", playback.retryAttempt)
-                .put("decoder", RuntimeState.decoderName())
-                .put("hardwareDecoder", RuntimeState.decoderHardwareAccelerated()))
-            .put("privileged", JSONObject()
-                .put("root", privileged.rootAvailable)
-                .put("magisk", privileged.magiskAvailable)
-                .put("shizukuAlive", privileged.shizukuAlive)
-                .put("shizukuAuthorized", privileged.shizukuAuthorized)
-                .put("bootScriptInstalled", privileged.bootScriptInstalled))
+            .put("app", JSONObject().put("version", BuildConfig.VERSION_NAME).put("versionCode", BuildConfig.VERSION_CODE).put("debug", BuildConfig.DEBUG))
+            .put("device", JSONObject().put("name", deviceInfo.getDeviceName()).put("id", deviceInfo.getDeviceId()).put("manufacturer", Build.MANUFACTURER).put("model", Build.MODEL).put("android", Build.VERSION.RELEASE).put("sdk", Build.VERSION.SDK_INT).put("ip", NetworkUtils.getLocalIpAddress().orEmpty()))
+            .put("webui", JSONObject().put("port", runtimePort).put("preferredPort", preferredPort).put("fallback", runtimePort != preferredPort)
+                .put("authRequired", AppSettings.isWebUiAuthRequired(appContext)).put("authMode", AppSettings.getWebUiAuthMode(appContext)))
+            .put("service", JSONObject().put("running", RuntimeState.serviceRunning).put("startedAtMs", RuntimeState.serviceStartedAtMs).put("uptimeMs", if (RuntimeState.serviceStartedAtMs > 0) now - RuntimeState.serviceStartedAtMs else 0).put("lastError", RuntimeState.lastError))
+            .put("airplay", JSONObject().put("state", RuntimeState.airPlayState).put("sender", RuntimeState.airPlaySender))
+            .put("miracast", JSONObject().put("state", RuntimeState.miracastState).put("client", RuntimeState.miracastClient).put("rtpPort", RuntimeState.miracastRtpPort))
+            .put("playback", JSONObject().put("state", playback.state).put("title", playback.title).put("uri", playback.uri).put("positionMs", playback.positionMs).put("durationMs", playback.durationMs).put("speed", playback.speed.toDouble()).put("volume", playback.volume).put("source", playback.source).put("error", playback.error).put("retryAttempt", playback.retryAttempt).put("decoder", RuntimeState.decoderName()).put("hardwareDecoder", RuntimeState.decoderHardwareAccelerated()))
+            .put("privileged", JSONObject().put("root", privileged.rootAvailable).put("magisk", privileged.magiskAvailable).put("shizukuAlive", privileged.shizukuAlive).put("shizukuAuthorized", privileged.shizukuAuthorized).put("bootScriptInstalled", privileged.bootScriptInstalled))
     }
 
     private fun buildConfig(): JSONObject {
         val s = AppSettings.snapshot(appContext)
         val runtimePort = RuntimeState.webUiPort.takeIf { it > 0 } ?: s.webUiLastBoundPort ?: s.webUiPort
         return JSONObject()
-            .put("airPlayEnabled", s.airPlayEnabled)
-            .put("dlnaEnabled", s.dlnaEnabled)
-            .put("miracastEnabled", s.miracastEnabled)
-            .put("customMdnsEnabled", s.customMdnsEnabled)
-            .put("airPlayAudioEnabled", s.airPlayAudioEnabled)
-            .put("autoLaunchPlayer", s.autoLaunchPlayer)
-            .put("mirrorMaxHeight", s.mirrorMaxHeight)
-            .put("upnpPort", s.upnpPort)
-            .put("webUiEnabled", s.webUiEnabled)
-            .put("webUiPort", s.webUiPort)
-            .put("webUiRuntimePort", runtimePort)
-            .put("webUiFallbackActive", runtimePort != s.webUiPort)
-            .put("webUiAuthRequired", s.webUiAuthRequired)
-            .put("autoStartOnBoot", s.autoStartOnBoot)
-            .put("deviceName", s.deviceNameOverride.orEmpty())
-            .put("connectionCode", AppSettings.getOrCreateConnectionCode(appContext))
+            .put("airPlayEnabled", s.airPlayEnabled).put("dlnaEnabled", s.dlnaEnabled).put("miracastEnabled", s.miracastEnabled)
+            .put("customMdnsEnabled", s.customMdnsEnabled).put("airPlayAudioEnabled", s.airPlayAudioEnabled).put("autoLaunchPlayer", s.autoLaunchPlayer)
+            .put("mirrorMaxHeight", s.mirrorMaxHeight).put("upnpPort", s.upnpPort).put("webUiEnabled", s.webUiEnabled).put("webUiPort", s.webUiPort)
+            .put("webUiRuntimePort", runtimePort).put("webUiFallbackActive", runtimePort != s.webUiPort).put("webUiAuthRequired", s.webUiAuthRequired)
+            .put("webUiAuthMode", s.webUiAuthMode).put("webUiCustomToken", if (s.webUiAuthMode == AppSettings.WEB_UI_AUTH_CUSTOM) AppSettings.getWebUiCustomToken(appContext).orEmpty() else "")
+            .put("autoStartOnBoot", s.autoStartOnBoot).put("deviceName", s.deviceNameOverride.orEmpty()).put("connectionCode", AppSettings.getOrCreateConnectionCode(appContext))
     }
 
     private fun buildDiagnostics(): JSONObject {
@@ -454,82 +351,35 @@ class WebUiServer(
         val preferredPort = AppSettings.getWebUiPort(appContext)
         val runtimePort = RuntimeState.webUiPort.takeIf { it > 0 } ?: AppSettings.getWebUiLastBoundPort(appContext) ?: preferredPort
         return JSONObject()
-            .put("network", JSONObject()
-                .put("ip", NetworkUtils.getLocalIpAddress().orEmpty())
-                .put("available", NetworkUtils.isNetworkAvailable(appContext))
-                .put("wifi", NetworkUtils.isWifiConnected(appContext)))
-            .put("codecs", JSONObject()
-                .put("h264", CodecUtils.isVideoDecoderSupported(CodecUtils.MIME_VIDEO_H264))
-                .put("h265", CodecUtils.isVideoDecoderSupported(CodecUtils.MIME_VIDEO_H265))
-                .put("recommendedMime", recommended.mimeType)
-                .put("recommendedWidth", recommended.width)
-                .put("recommendedHeight", recommended.height)
-                .put("recommendedFps", recommended.frameRate)
-                .put("activeDecoder", RuntimeState.decoderName())
-                .put("activeDecoderHardware", RuntimeState.decoderHardwareAccelerated()))
-            .put("ports", JSONObject()
-                .put("webUi", runtimePort)
-                .put("webUiPreferred", preferredPort)
-                .put("webUiFallback", runtimePort != preferredPort)
-                .put("upnp", AppSettings.getUpnpPort(appContext))
-                .put("miracastRtsp", MIRACAST_RTSP_PORT))
-            .put("limits", JSONObject()
-                .put("maxRequestBodyBytes", MAX_BODY_BYTES)
-                .put("maxConcurrentClients", MAX_CONCURRENT_CLIENTS)
-                .put("maxMediaUrlLength", MediaUrlRequest.MAX_URL_LENGTH)
-                .put("maxMediaHeaders", MediaUrlRequest.MAX_HEADERS)
-                .put("logEntries", WebLogBuffer.snapshot(600).size))
+            .put("network", JSONObject().put("ip", NetworkUtils.getLocalIpAddress().orEmpty()).put("available", NetworkUtils.isNetworkAvailable(appContext)).put("wifi", NetworkUtils.isWifiConnected(appContext)))
+            .put("codecs", JSONObject().put("h264", CodecUtils.isVideoDecoderSupported(CodecUtils.MIME_VIDEO_H264)).put("h265", CodecUtils.isVideoDecoderSupported(CodecUtils.MIME_VIDEO_H265)).put("recommendedMime", recommended.mimeType).put("recommendedWidth", recommended.width).put("recommendedHeight", recommended.height).put("recommendedFps", recommended.frameRate).put("activeDecoder", RuntimeState.decoderName()).put("activeDecoderHardware", RuntimeState.decoderHardwareAccelerated()))
+            .put("ports", JSONObject().put("webUi", runtimePort).put("webUiPreferred", preferredPort).put("webUiFallback", runtimePort != preferredPort).put("upnp", AppSettings.getUpnpPort(appContext)).put("miracastRtsp", MIRACAST_RTSP_PORT))
+            .put("limits", JSONObject().put("maxRequestBodyBytes", MAX_BODY_BYTES).put("maxConcurrentClients", MAX_CONCURRENT_CLIENTS).put("maxMediaUrlLength", MediaUrlRequest.MAX_URL_LENGTH).put("maxMediaHeaders", MediaUrlRequest.MAX_HEADERS).put("logEntries", WebLogBuffer.snapshot(600).size))
     }
 
     private fun buildLogs(limit: Int): JSONObject {
         val entries = JSONArray()
-        WebLogBuffer.snapshot(limit).forEach { entry ->
-            entries.put(JSONObject()
-                .put("timestampMs", entry.timestampMs)
-                .put("timestamp", WebLogBuffer.formatTimestamp(entry.timestampMs))
-                .put("level", entry.level)
-                .put("tag", entry.tag)
-                .put("message", entry.message))
-        }
+        WebLogBuffer.snapshot(limit).forEach { entry -> entries.put(JSONObject().put("timestampMs", entry.timestampMs).put("timestamp", WebLogBuffer.formatTimestamp(entry.timestampMs)).put("level", entry.level).put("tag", entry.tag).put("message", entry.message)) }
         return JSONObject().put("entries", entries)
     }
 
     private fun isAuthorized(headers: Map<String, String>): Boolean {
-        if (!AppSettings.isWebUiAuthRequired(appContext)) return true
+        if (AppSettings.getWebUiAuthMode(appContext) == AppSettings.WEB_UI_AUTH_NONE) return true
         val expected = AppSettings.getOrCreateWebUiToken(appContext)
         val direct = headers["x-api-token"]
-        val bearer = headers["authorization"]
-            ?.takeIf { it.startsWith("Bearer ", ignoreCase = true) }
-            ?.substringAfter(' ')
+        val bearer = headers["authorization"]?.takeIf { it.startsWith("Bearer ", ignoreCase = true) }?.substringAfter(' ')
         return direct == expected || bearer == expected
     }
 
     private fun sendAsset(output: OutputStream, assetPath: String, contentType: String) {
-        val bytes = runCatching { appContext.assets.open(assetPath).use { it.readBytes() } }.getOrElse {
-            return sendText(output, 404, "Asset not found")
-        }
+        val bytes = runCatching { appContext.assets.open(assetPath).use { it.readBytes() } }.getOrElse { return sendText(output, 404, "Asset not found") }
         sendBytes(output, 200, contentType, bytes)
     }
-
-    private fun sendJson(output: OutputStream, status: Int, json: JSONObject) {
-        sendBytes(output, status, "application/json; charset=utf-8", json.toString().toByteArray(StandardCharsets.UTF_8))
-    }
-
-    private fun sendText(output: OutputStream, status: Int, text: String) {
-        sendBytes(output, status, "text/plain; charset=utf-8", text.toByteArray(StandardCharsets.UTF_8))
-    }
+    private fun sendJson(output: OutputStream, status: Int, json: JSONObject) { sendBytes(output, status, "application/json; charset=utf-8", json.toString().toByteArray(StandardCharsets.UTF_8)) }
+    private fun sendText(output: OutputStream, status: Int, text: String) { sendBytes(output, status, "text/plain; charset=utf-8", text.toByteArray(StandardCharsets.UTF_8)) }
 
     private fun sendBytes(output: OutputStream, status: Int, contentType: String, body: ByteArray) {
-        val reason = when (status) {
-            200 -> "OK"
-            400 -> "Bad Request"
-            401 -> "Unauthorized"
-            404 -> "Not Found"
-            413 -> "Payload Too Large"
-            431 -> "Request Header Fields Too Large"
-            503 -> "Service Unavailable"
-            else -> "Internal Server Error"
-        }
+        val reason = when (status) { 200 -> "OK"; 400 -> "Bad Request"; 401 -> "Unauthorized"; 404 -> "Not Found"; 413 -> "Payload Too Large"; 431 -> "Request Header Fields Too Large"; 503 -> "Service Unavailable"; else -> "Internal Server Error" }
         val header = buildString {
             append("HTTP/1.1 $status $reason\r\n")
             append("Content-Type: $contentType\r\n")
@@ -540,36 +390,26 @@ class WebUiServer(
             append("Referrer-Policy: no-referrer\r\n")
             append("Connection: close\r\n\r\n")
         }
-        output.write(header.toByteArray(StandardCharsets.US_ASCII))
-        output.write(body)
-        output.flush()
+        output.write(header.toByteArray(StandardCharsets.US_ASCII)); output.write(body); output.flush()
     }
 
     private fun readLine(input: BufferedInputStream, maxBytes: Int): String? {
-        val buffer = ByteArrayOutputStream()
-        var previous = -1
+        val buffer = ByteArrayOutputStream(); var previous = -1
         while (buffer.size() <= maxBytes) {
             val current = input.read()
             if (current == -1) return if (buffer.size() == 0) null else buffer.toString("UTF-8")
             if (previous == '\r'.code && current == '\n'.code) {
-                val bytes = buffer.toByteArray()
-                val length = (bytes.size - 1).coerceAtLeast(0)
+                val bytes = buffer.toByteArray(); val length = (bytes.size - 1).coerceAtLeast(0)
                 return String(bytes, 0, length, StandardCharsets.UTF_8)
             }
-            buffer.write(current)
-            previous = current
+            buffer.write(current); previous = current
         }
         throw IllegalArgumentException("HTTP line too long")
     }
 
     private fun readExact(input: BufferedInputStream, length: Int): ByteArray {
-        val bytes = ByteArray(length)
-        var offset = 0
-        while (offset < length) {
-            val read = input.read(bytes, offset, length - offset)
-            if (read < 0) throw IllegalArgumentException("Unexpected end of request body")
-            offset += read
-        }
+        val bytes = ByteArray(length); var offset = 0
+        while (offset < length) { val read = input.read(bytes, offset, length - offset); if (read < 0) throw IllegalArgumentException("Unexpected end of request body"); offset += read }
         return bytes
     }
 
@@ -577,10 +417,7 @@ class WebUiServer(
         if (query.isBlank()) return emptyMap()
         return query.split('&').mapNotNull { pair ->
             val key = pair.substringBefore('=', "")
-            if (key.isBlank()) null else {
-                val value = pair.substringAfter('=', "")
-                URLDecoder.decode(key, "UTF-8") to URLDecoder.decode(value, "UTF-8")
-            }
+            if (key.isBlank()) null else URLDecoder.decode(key, "UTF-8") to URLDecoder.decode(pair.substringAfter('=', ""), "UTF-8")
         }.toMap()
     }
 

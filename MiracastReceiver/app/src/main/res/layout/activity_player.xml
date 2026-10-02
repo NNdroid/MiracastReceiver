@@ -18,7 +18,7 @@
         app:keep_content_on_player_reset="true"
         app:resize_mode="fit"
         app:show_buffering="when_playing"
-        app:show_timeout="5000"
+        app:show_timeout="2000"
         app:surface_type="surface_view"
         app:use_controller="true" />
 

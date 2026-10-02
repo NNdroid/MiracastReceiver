@@ -12,6 +12,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.Lifecycle
 import com.weekd.miracastreceiver.R
 import com.weekd.miracastreceiver.service.CastReceiverService
 import com.weekd.miracastreceiver.util.AppSettings
@@ -105,10 +106,14 @@ class MainActivity : AppCompatActivity() {
         val target = existing ?: fragmentFor(destination)
         val transaction = manager.beginTransaction().setReorderingAllowed(true)
         manager.fragments.forEach { fragment ->
-            if (fragment != target && !fragment.isHidden) transaction.hide(fragment)
+            if (fragment != target) {
+                transaction.hide(fragment)
+                transaction.setMaxLifecycle(fragment, Lifecycle.State.CREATED)
+            }
         }
         if (target.isAdded) transaction.show(target)
         else transaction.add(R.id.fragment_container, target, destination.name)
+        transaction.setMaxLifecycle(target, Lifecycle.State.RESUMED)
 
         currentDestination = destination
         transaction.runOnCommit {

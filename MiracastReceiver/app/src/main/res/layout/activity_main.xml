@@ -12,31 +12,56 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:paddingLeft="48dp"
-        android:paddingTop="36dp"
-        android:paddingRight="48dp"
-        android:paddingBottom="36dp">
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/app_name"
-            android:textColor="@color/text_primary"
-            android:textSize="34sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:text="@string/tv_subtitle"
-            android:textColor="@color/text_secondary"
-            android:textSize="17sp" />
+        android:paddingLeft="46dp"
+        android:paddingTop="32dp"
+        android:paddingRight="46dp"
+        android:paddingBottom="34dp">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="26dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/app_name"
+                    android:textColor="@color/text_primary"
+                    android:textSize="36sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="5dp"
+                    android:text="Android TV 接收中心 · AirPlay · DLNA · Miracast"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="16sp" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/tv_status"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_status_chip"
+                android:gravity="center"
+                android:text="@string/waiting_connection"
+                android:textColor="@color/success"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="24dp"
             android:baselineAligned="false"
             android:orientation="horizontal">
 
@@ -44,53 +69,28 @@
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
                 android:layout_marginRight="14dp"
-                android:layout_weight="1.15"
-                android:background="@drawable/bg_tv_panel"
+                android:layout_weight="1.22"
+                android:background="@drawable/bg_tv_hero"
                 android:orientation="vertical"
                 android:padding="28dp">
 
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="@string/receiver_status"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="16sp"
+                    android:text="RECEIVER ONLINE"
+                    android:textColor="@color/accent"
+                    android:textSize="13sp"
                     android:textStyle="bold" />
-
-                <LinearLayout
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="18dp"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal">
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="●"
-                        android:textColor="@color/success"
-                        android:textSize="20sp" />
-
-                    <TextView
-                        android:id="@+id/tv_status"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginLeft="10dp"
-                        android:text="@string/waiting_connection"
-                        android:textColor="@color/text_primary"
-                        android:textSize="24sp"
-                        android:textStyle="bold" />
-                </LinearLayout>
 
                 <TextView
                     android:id="@+id/tv_device_name"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="26dp"
+                    android:layout_marginTop="10dp"
                     android:ellipsize="end"
                     android:maxLines="2"
                     android:textColor="@color/text_primary"
-                    android:textSize="30sp"
+                    android:textSize="34sp"
                     android:textStyle="bold"
                     tools:text="客厅 Android TV" />
 
@@ -98,118 +98,149 @@
                     android:id="@+id/tv_device_ip"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="10dp"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="17sp"
-                    tools:text="设备 IP: 192.168.1.100" />
-
-                <View
-                    android:layout_width="match_parent"
-                    android:layout_height="1dp"
-                    android:layout_marginTop="24dp"
-                    android:background="@color/divider" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="20dp"
-                    android:text="@string/connection_code_label"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="15sp" />
-
-                <TextView
-                    android:id="@+id/tv_connection_code"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="4dp"
-                    android:letterSpacing="0.18"
-                    android:textColor="@color/accent"
-                    android:textSize="40sp"
-                    android:textStyle="bold"
-                    tools:text="ABC123" />
-
-                <View
-                    android:layout_width="match_parent"
-                    android:layout_height="1dp"
-                    android:layout_marginTop="24dp"
-                    android:background="@color/divider" />
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="20dp"
-                    android:text="WebUI 管理"
-                    android:textColor="@color/text_secondary"
-                    android:textSize="15sp" />
-
-                <TextView
-                    android:id="@+id/tv_webui_url"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp"
-                    android:textColor="@color/text_primary"
-                    android:textIsSelectable="true"
-                    android:textSize="18sp"
-                    android:textStyle="bold"
-                    tools:text="http://192.168.1.100:18090" />
-
-                <TextView
-                    android:id="@+id/tv_webui_token"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"
-                    android:fontFamily="monospace"
-                    android:textColor="@color/accent"
-                    android:textIsSelectable="true"
-                    android:textSize="14sp"
-                    tools:text="Token: 0123456789abcdef" />
+                    android:textColor="@color/text_secondary"
+                    android:textSize="16sp"
+                    tools:text="设备 IP: 192.168.1.100" />
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="18dp"
+                    android:layout_marginTop="22dp"
                     android:gravity="center_vertical"
                     android:orientation="horizontal">
-
-                    <com.weekd.miracastreceiver.ui.WebUiQrImageView
-                        android:layout_width="154dp"
-                        android:layout_height="154dp"
-                        android:background="@drawable/bg_qr_frame"
-                        android:contentDescription="扫码打开 WebUI"
-                        android:scaleType="fitCenter" />
 
                     <LinearLayout
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
-                        android:layout_marginLeft="18dp"
                         android:layout_weight="1"
                         android:orientation="vertical">
 
                         <TextView
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="手机扫码直达"
+                            android:text="连接码"
+                            android:textColor="@color/text_muted"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:id="@+id/tv_connection_code"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="4dp"
+                            android:letterSpacing="0.16"
+                            android:textColor="@color/accent"
+                            android:textSize="38sp"
+                            android:textStyle="bold"
+                            tools:text="ABC123" />
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="工作模式"
+                            android:textColor="@color/text_muted"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="7dp"
+                            android:text="后台常驻 · 随时可投"
                             android:textColor="@color/text_primary"
                             android:textSize="18sp"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+                </LinearLayout>
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginTop="22dp"
+                    android:background="@color/divider" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="20dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginRight="22dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="WEBUI 快速访问"
+                            android:textColor="@color/blue_soft"
+                            android:textSize="13sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/tv_webui_url"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:textColor="@color/text_primary"
+                            android:textIsSelectable="true"
+                            android:textSize="20sp"
+                            android:textStyle="bold"
+                            tools:text="http://192.168.1.100:18090" />
+
+                        <TextView
+                            android:id="@+id/tv_webui_port_status"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="14sp"
+                            tools:text="实际 18090 · 使用首选端口" />
+
+                        <TextView
+                            android:id="@+id/tv_webui_token"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="8dp"
+                            android:textColor="@color/text_muted"
+                            android:textSize="13sp"
+                            tools:text="Token 已嵌入二维码 · 01234567…abcdef" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="16dp"
+                            android:text="手机扫码直达 · 自动完成 Token 登录"
+                            android:textColor="@color/accent"
+                            android:textSize="15sp"
                             android:textStyle="bold" />
 
                         <TextView
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="6dp"
-                            android:lineSpacingExtra="3dp"
-                            android:text="二维码已自动包含当前 WebUI 地址和 Token，无需手动输入长 Token。"
-                            android:textColor="@color/text_secondary"
-                            android:textSize="13sp" />
-
-                        <TextView
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="6dp"
-                            android:text="Token 使用 URL #fragment，仅由浏览器读取，不会作为 HTTP 参数发送。"
+                            android:layout_marginTop="5dp"
+                            android:lineSpacingExtra="2dp"
+                            android:text="认证信息使用 URL #fragment，仅由浏览器读取，不会发送到 WebUI HTTP 服务。"
                             android:textColor="@color/text_muted"
                             android:textSize="11sp" />
                     </LinearLayout>
+
+                    <com.weekd.miracastreceiver.ui.WebUiQrImageView
+                        android:layout_width="190dp"
+                        android:layout_height="190dp"
+                        android:background="@drawable/bg_qr_frame"
+                        android:contentDescription="扫码打开 WebUI"
+                        android:scaleType="fitCenter" />
                 </LinearLayout>
             </LinearLayout>
 
@@ -217,7 +248,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_marginLeft="14dp"
-                android:layout_weight="1"
+                android:layout_weight="0.9"
                 android:orientation="vertical">
 
                 <LinearLayout
@@ -225,80 +256,65 @@
                     android:layout_height="wrap_content"
                     android:background="@drawable/bg_tv_panel"
                     android:orientation="vertical"
-                    android:padding="24dp">
+                    android:padding="22dp">
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="@string/privileged_status"
+                        android:text="系统能力"
                         android:textColor="@color/text_primary"
-                        android:textSize="21sp"
+                        android:textSize="20sp"
                         android:textStyle="bold" />
 
-                    <TextView android:id="@+id/tv_root_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="16dp" android:text="@string/root_status_checking" android:textColor="@color/text_secondary" android:textSize="16sp" />
-                    <TextView android:id="@+id/tv_shizuku_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="9dp" android:text="@string/shizuku_status_checking" android:textColor="@color/text_secondary" android:textSize="16sp" />
-                    <TextView android:id="@+id/tv_overlay_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="9dp" android:text="@string/overlay_status_checking" android:textColor="@color/text_secondary" android:textSize="16sp" />
-                    <TextView android:id="@+id/tv_boot_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="9dp" android:text="@string/boot_status_checking" android:textColor="@color/text_secondary" android:textSize="16sp" />
+                    <TextView android:id="@+id/tv_root_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="15dp" android:text="@string/root_status_checking" android:textColor="@color/text_secondary" android:textSize="15sp" />
+                    <TextView android:id="@+id/tv_shizuku_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="@string/shizuku_status_checking" android:textColor="@color/text_secondary" android:textSize="15sp" />
+                    <TextView android:id="@+id/tv_overlay_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="@string/overlay_status_checking" android:textColor="@color/text_secondary" android:textSize="15sp" />
+                    <TextView android:id="@+id/tv_boot_status" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:text="@string/boot_status_checking" android:textColor="@color/text_secondary" android:textSize="15sp" />
                 </LinearLayout>
 
-                <LinearLayout
+                <androidx.appcompat.widget.SwitchCompat
+                    android:id="@+id/switch_auto_start"
                     android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="14dp"
-                    android:addStatesFromChildren="true"
+                    android:layout_height="62dp"
+                    android:layout_marginTop="12dp"
                     android:background="@drawable/bg_setting_item"
-                    android:orientation="vertical"
-                    android:padding="18dp">
-
-                    <androidx.appcompat.widget.SwitchCompat
-                        android:id="@+id/switch_auto_start"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:focusable="true"
-                        android:focusableInTouchMode="false"
-                        android:minHeight="54dp"
-                        android:nextFocusDown="@id/switch_airplay"
-                        android:text="@string/auto_start_on_boot"
-                        android:textColor="@color/text_primary"
-                        android:textSize="18sp" />
-
-                    <TextView
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="5dp"
-                        android:text="@string/auto_start_on_boot_hint"
-                        android:textColor="@color/text_muted"
-                        android:textSize="13sp" />
-                </LinearLayout>
+                    android:focusable="true"
+                    android:nextFocusDown="@id/switch_airplay"
+                    android:paddingLeft="18dp"
+                    android:paddingRight="18dp"
+                    android:text="开机自动启动接收服务"
+                    android:textColor="@color/text_primary"
+                    android:textSize="17sp" />
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="14dp"
+                    android:layout_marginTop="12dp"
                     android:background="@drawable/bg_tv_panel"
                     android:orientation="vertical"
-                    android:padding="18dp">
+                    android:padding="14dp">
 
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
+                        android:layout_marginLeft="4dp"
                         android:layout_marginBottom="8dp"
-                        android:text="接收协议快捷开关"
+                        android:text="接收协议"
                         android:textColor="@color/text_secondary"
                         android:textSize="14sp"
                         android:textStyle="bold" />
 
-                    <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_airplay" android:layout_width="match_parent" android:layout_height="52dp" android:focusable="true" android:nextFocusUp="@id/switch_auto_start" android:nextFocusDown="@id/switch_dlna" android:text="AirPlay" android:textColor="@color/text_primary" android:textSize="17sp" />
-                    <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_dlna" android:layout_width="match_parent" android:layout_height="52dp" android:focusable="true" android:nextFocusUp="@id/switch_airplay" android:nextFocusDown="@id/switch_miracast" android:text="DLNA / UPnP" android:textColor="@color/text_primary" android:textSize="17sp" />
-                    <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_miracast" android:layout_width="match_parent" android:layout_height="52dp" android:focusable="true" android:nextFocusUp="@id/switch_dlna" android:nextFocusDown="@id/switch_webui" android:text="Miracast / WFD" android:textColor="@color/text_primary" android:textSize="17sp" />
-                    <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_webui" android:layout_width="match_parent" android:layout_height="52dp" android:focusable="true" android:nextFocusUp="@id/switch_miracast" android:nextFocusDown="@id/btn_optimize_background" android:text="WebUI" android:textColor="@color/text_primary" android:textSize="17sp" />
+                    <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_airplay" android:layout_width="match_parent" android:layout_height="54dp" android:background="@drawable/bg_setting_item" android:focusable="true" android:nextFocusUp="@id/switch_auto_start" android:nextFocusDown="@id/switch_dlna" android:paddingLeft="16dp" android:paddingRight="16dp" android:text="AirPlay" android:textColor="@color/text_primary" android:textSize="16sp" />
+                    <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_dlna" android:layout_width="match_parent" android:layout_height="54dp" android:layout_marginTop="7dp" android:background="@drawable/bg_setting_item" android:focusable="true" android:nextFocusUp="@id/switch_airplay" android:nextFocusDown="@id/switch_miracast" android:paddingLeft="16dp" android:paddingRight="16dp" android:text="DLNA / UPnP" android:textColor="@color/text_primary" android:textSize="16sp" />
+                    <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_miracast" android:layout_width="match_parent" android:layout_height="54dp" android:layout_marginTop="7dp" android:background="@drawable/bg_setting_item" android:focusable="true" android:nextFocusUp="@id/switch_dlna" android:nextFocusDown="@id/switch_webui" android:paddingLeft="16dp" android:paddingRight="16dp" android:text="Miracast / WFD" android:textColor="@color/text_primary" android:textSize="16sp" />
+                    <androidx.appcompat.widget.SwitchCompat android:id="@+id/switch_webui" android:layout_width="match_parent" android:layout_height="54dp" android:layout_marginTop="7dp" android:background="@drawable/bg_setting_item" android:focusable="true" android:nextFocusUp="@id/switch_miracast" android:nextFocusDown="@id/btn_optimize_background" android:paddingLeft="16dp" android:paddingRight="16dp" android:text="WebUI 局域网管理" android:textColor="@color/text_primary" android:textSize="16sp" />
                 </LinearLayout>
 
                 <Button
                     android:id="@+id/btn_optimize_background"
                     android:layout_width="match_parent"
-                    android:layout_height="64dp"
-                    android:layout_marginTop="14dp"
+                    android:layout_height="62dp"
+                    android:layout_marginTop="12dp"
                     android:background="@drawable/bg_tv_action"
                     android:focusable="true"
                     android:nextFocusDown="@id/btn_restart_receiver"
@@ -306,21 +322,21 @@
                     android:text="@string/optimize_background"
                     android:textAllCaps="false"
                     android:textColor="@color/text_primary"
-                    android:textSize="18sp"
+                    android:textSize="17sp"
                     android:textStyle="bold" />
 
                 <Button
                     android:id="@+id/btn_restart_receiver"
                     android:layout_width="match_parent"
-                    android:layout_height="64dp"
-                    android:layout_marginTop="12dp"
+                    android:layout_height="62dp"
+                    android:layout_marginTop="10dp"
                     android:background="@drawable/bg_tv_action"
                     android:focusable="true"
                     android:nextFocusUp="@id/btn_optimize_background"
                     android:text="@string/restart_receiver"
                     android:textAllCaps="false"
                     android:textColor="@color/text_primary"
-                    android:textSize="18sp"
+                    android:textSize="17sp"
                     android:textStyle="bold" />
             </LinearLayout>
         </LinearLayout>
@@ -328,10 +344,11 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="22dp"
+            android:layout_marginTop="18dp"
             android:background="@drawable/bg_tv_panel"
+            android:gravity="center_vertical"
             android:orientation="horizontal"
-            android:padding="22dp">
+            android:padding="20dp">
 
             <LinearLayout
                 android:layout_width="0dp"
@@ -339,16 +356,28 @@
                 android:layout_weight="1"
                 android:orientation="vertical">
 
-                <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/how_to_connect" android:textColor="@color/text_primary" android:textSize="18sp" android:textStyle="bold" />
-                <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:lineSpacingExtra="4dp" android:text="@string/connect_instruction" android:textColor="@color/text_secondary" android:textSize="14sp" />
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="怎么投屏"
+                    android:textColor="@color/text_primary"
+                    android:textSize="17sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="iPhone / iPad：AirPlay 屏幕镜像  ·  Android 视频 App：DLNA  ·  Windows：Win + K Miracast"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="14sp" />
             </LinearLayout>
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_gravity="bottom"
                 android:layout_marginLeft="28dp"
-                android:text="@string/remote_hint"
+                android:text="遥控器方向键选择 · OK 确认"
                 android:textColor="@color/text_muted"
                 android:textSize="13sp" />
         </LinearLayout>

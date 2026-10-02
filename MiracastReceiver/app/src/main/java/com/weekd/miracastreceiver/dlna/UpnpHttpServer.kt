@@ -8,11 +8,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import timber.log.Timber
-import java.io.BufferedReader
-import java.io.InputStreamReader
+import java.io.BufferedInputStream
+import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import java.net.ServerSocket
 import java.net.Socket
+import java.nio.charset.StandardCharsets
+import java.util.TreeMap
 
 /**
  * UPnP HTTP 服务器
@@ -70,61 +72,151 @@ class UpnpHttpServer(
     private fun handleClient(socket: Socket) {
         socket.use { client ->
             try {
-                val reader = BufferedReader(InputStreamReader(client.getInputStream()))
+                client.soTimeout = SOCKET_TIMEOUT_MS
+                client.tcpNoDelay = true
+
+                val input = BufferedInputStream(client.getInputStream())
                 val output = client.getOutputStream()
 
-                val requestLine = reader.readLine() ?: return
-                val headers = mutableMapOf<String, String>()
-                var contentLength = 0
-
-                var line: String?
-                while (true) {
-                    line = reader.readLine()
-                    if (line.isNullOrEmpty()) break
-                    val index = line.indexOf(':')
-                    if (index > 0) {
-                        val key = line.substring(0, index).trim()
-                        val value = line.substring(index + 1).trim()
-                        headers[key] = value
-
-                        if (key.equals("Content-Length", ignoreCase = true)) {
-                            contentLength = value.toIntOrNull() ?: 0
-                        }
-                    }
+                val requestLine = readHttpLine(input, MAX_REQUEST_LINE_BYTES) ?: return
+                val parts = requestLine.split(' ', limit = 3)
+                if (parts.size < 2) {
+                    sendHttpError(output, 400, "Bad Request")
+                    return
                 }
 
-                // 读取 body
+                // HTTP header names are case-insensitive. A case-insensitive map also preserves
+                // compatibility with the existing SOAPAction lookups below.
+                val headers = TreeMap<String, String>(String.CASE_INSENSITIVE_ORDER)
+                var headerBytes = 0
+
+                while (true) {
+                    val line = readHttpLine(input, MAX_HEADER_LINE_BYTES)
+                        ?: throw IllegalArgumentException("Unexpected EOF in HTTP headers")
+                    if (line.isEmpty()) break
+
+                    headerBytes += line.toByteArray(StandardCharsets.ISO_8859_1).size + 2
+                    if (headerBytes > MAX_HEADER_BYTES) {
+                        sendHttpError(output, 431, "Request Header Fields Too Large")
+                        return
+                    }
+
+                    val index = line.indexOf(':')
+                    if (index <= 0) {
+                        sendHttpError(output, 400, "Bad Request")
+                        return
+                    }
+                    val key = line.substring(0, index).trim()
+                    val value = line.substring(index + 1).trim()
+                    headers[key] = value
+                }
+
+                if (headers["Transfer-Encoding"]?.contains("chunked", ignoreCase = true) == true) {
+                    // UPnP control requests are expected to provide Content-Length. Explicitly
+                    // reject an unsupported framing mode instead of accidentally parsing an empty
+                    // or truncated SOAP body.
+                    sendHttpError(output, 400, "Chunked Request Body Not Supported")
+                    return
+                }
+
+                val contentLengthLong = headers["Content-Length"]?.toLongOrNull() ?: 0L
+                if (contentLengthLong < 0L) {
+                    sendHttpError(output, 400, "Bad Content-Length")
+                    return
+                }
+                if (contentLengthLong > MAX_BODY_BYTES) {
+                    sendHttpError(output, 413, "Payload Too Large")
+                    return
+                }
+                val contentLength = contentLengthLong.toInt()
+
+                if (contentLength > 0 && headers["Expect"]?.equals("100-continue", ignoreCase = true) == true) {
+                    output.write("HTTP/1.1 100 Continue\r\n\r\n".toByteArray(StandardCharsets.US_ASCII))
+                    output.flush()
+                }
+
+                // Content-Length is a byte count, so read the raw stream exactly. The previous
+                // BufferedReader.read(...) call could legally return a partial SOAP body when TCP
+                // split the request across packets.
                 val body = if (contentLength > 0) {
-                    val buffer = CharArray(contentLength)
-                    reader.read(buffer, 0, contentLength)
-                    String(buffer)
+                    String(readExact(input, contentLength), StandardCharsets.UTF_8)
                 } else {
                     ""
                 }
 
-                val parts = requestLine.split(" ")
-                if (parts.size >= 2) {
-                    val method = parts[0]
-                    val path = parts[1]
+                val method = parts[0]
+                val path = parts[1].substringBefore('?')
+                Timber.d("UPnP $method $path")
 
-                    Timber.d("UPnP $method $path")
-
-                    when {
-                        path == "/device.xml" -> sendDeviceDescription(output)
-                        path == "/service/ConnectionManager.xml" -> sendConnectionManagerScpd(output)
-                        path == "/service/AVTransport.xml" -> sendAvTransportScpd(output)
-                        path == "/service/RenderingControl.xml" -> sendRenderingControlScpd(output)
-                        path == "/control/AVTransport" -> handleAvTransportControl(output, body, headers)
-                        path == "/control/RenderingControl" -> handleRenderingControl(output, body, headers)
-                        path == "/control/ConnectionManager" -> handleConnectionManager(output, body, headers)
-                        path.startsWith("/event/") -> handleEvent(output)
-                        else -> sendNotFound(output)
-                    }
+                when {
+                    path == "/device.xml" -> sendDeviceDescription(output)
+                    path == "/service/ConnectionManager.xml" -> sendConnectionManagerScpd(output)
+                    path == "/service/AVTransport.xml" -> sendAvTransportScpd(output)
+                    path == "/service/RenderingControl.xml" -> sendRenderingControlScpd(output)
+                    path == "/control/AVTransport" -> handleAvTransportControl(output, body, headers)
+                    path == "/control/RenderingControl" -> handleRenderingControl(output, body, headers)
+                    path == "/control/ConnectionManager" -> handleConnectionManager(output, body, headers)
+                    path.startsWith("/event/") -> handleEvent(output)
+                    else -> sendNotFound(output)
                 }
             } catch (e: Exception) {
-                Timber.e(e, "Error handling UPnP client")
+                Timber.w(e, "Error handling UPnP client")
             }
         }
+    }
+
+    private fun readHttpLine(input: BufferedInputStream, maxBytes: Int): String? {
+        val buffer = ByteArrayOutputStream()
+        var previous = -1
+
+        while (buffer.size() <= maxBytes) {
+            val current = input.read()
+            if (current == -1) {
+                return if (buffer.size() == 0) null
+                else String(buffer.toByteArray(), StandardCharsets.ISO_8859_1)
+            }
+
+            if (previous == '\r'.code && current == '\n'.code) {
+                val bytes = buffer.toByteArray()
+                val length = (bytes.size - 1).coerceAtLeast(0)
+                return String(bytes, 0, length, StandardCharsets.ISO_8859_1)
+            }
+
+            buffer.write(current)
+            previous = current
+        }
+
+        throw IllegalArgumentException("HTTP line exceeds $maxBytes bytes")
+    }
+
+    private fun readExact(input: BufferedInputStream, length: Int): ByteArray {
+        val bytes = ByteArray(length)
+        var offset = 0
+        while (offset < length) {
+            val read = input.read(bytes, offset, length - offset)
+            if (read < 0) throw IllegalArgumentException("Unexpected EOF in HTTP request body")
+            offset += read
+        }
+        return bytes
+    }
+
+    private fun sendHttpError(output: OutputStream, status: Int, message: String) {
+        val body = message.toByteArray(StandardCharsets.UTF_8)
+        val reason = when (status) {
+            400 -> "Bad Request"
+            413 -> "Payload Too Large"
+            431 -> "Request Header Fields Too Large"
+            else -> "Bad Request"
+        }
+        val header = buildString {
+            append("HTTP/1.1 $status $reason\r\n")
+            append("Content-Type: text/plain; charset=utf-8\r\n")
+            append("Content-Length: ${body.size}\r\n")
+            append("Connection: close\r\n\r\n")
+        }
+        output.write(header.toByteArray(StandardCharsets.US_ASCII))
+        output.write(body)
+        output.flush()
     }
 
     private fun sendDeviceDescription(output: OutputStream) {
@@ -446,5 +538,13 @@ class UpnpHttpServer(
             ?.coerceIn(0.25f, 4f)
             ?.toString()
             ?: ""
+    }
+
+    companion object {
+        private const val SOCKET_TIMEOUT_MS = 10_000
+        private const val MAX_REQUEST_LINE_BYTES = 8 * 1024
+        private const val MAX_HEADER_LINE_BYTES = 8 * 1024
+        private const val MAX_HEADER_BYTES = 32 * 1024
+        private const val MAX_BODY_BYTES = 1024 * 1024L
     }
 }

@@ -44,6 +44,11 @@ object PortUtils {
         throw IllegalStateException("Unable to allocate a TCP port")
     }
 
+    /** Bind the requested port on every usable IP family, or fail without changing the port. */
+    fun bindFixedServerSocket(port: Int, backlog: Int = 50): ServerSocket =
+        tryBindDualStack(port, backlog)
+            ?: throw java.io.IOException("Unable to bind TCP port $port on IPv4/IPv6")
+
     /**
      * Bind a logical server socket that is reachable through both IPv4 and IPv6 whenever the
      * platform supports them.

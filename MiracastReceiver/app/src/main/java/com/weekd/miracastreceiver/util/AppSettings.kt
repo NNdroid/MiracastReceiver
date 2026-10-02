@@ -26,11 +26,12 @@ object AppSettings {
     private const val KEY_UPNP_PORT = "upnp_port"
     private const val KEY_WEB_UI_ENABLED = "web_ui_enabled"
     private const val KEY_WEB_UI_PORT = "web_ui_port"
+    private const val KEY_WEB_UI_LAST_BOUND_PORT = "web_ui_last_bound_port"
     private const val KEY_WEB_UI_AUTH_REQUIRED = "web_ui_auth_required"
     private const val KEY_WEB_UI_TOKEN = "web_ui_token"
 
     const val DEFAULT_UPNP_PORT = 8080
-    const val DEFAULT_WEB_UI_PORT = 8090
+    const val DEFAULT_WEB_UI_PORT = 18090
     const val DEFAULT_MIRROR_MAX_HEIGHT = 0 // 0 = auto / display maximum
 
     fun isAutoStartOnBoot(context: Context): Boolean =
@@ -107,11 +108,24 @@ object AppSettings {
         prefs(context).edit().putBoolean(KEY_WEB_UI_ENABLED, enabled).apply()
     }
 
+    /** Preferred WebUI port. The runtime may bind a fallback when this port is occupied. */
     fun getWebUiPort(context: Context): Int =
         sanitizePort(prefs(context).getInt(KEY_WEB_UI_PORT, DEFAULT_WEB_UI_PORT), DEFAULT_WEB_UI_PORT)
 
     fun setWebUiPort(context: Context, port: Int) {
         prefs(context).edit().putInt(KEY_WEB_UI_PORT, sanitizePort(port, DEFAULT_WEB_UI_PORT)).apply()
+    }
+
+    /** Last port the WebUI successfully bound. Used to keep an automatically selected fallback stable. */
+    fun getWebUiLastBoundPort(context: Context): Int? {
+        val port = prefs(context).getInt(KEY_WEB_UI_LAST_BOUND_PORT, 0)
+        return port.takeIf { it in 1024..65535 }
+    }
+
+    fun setWebUiLastBoundPort(context: Context, port: Int) {
+        if (port in 1024..65535) {
+            prefs(context).edit().putInt(KEY_WEB_UI_LAST_BOUND_PORT, port).apply()
+        }
     }
 
     fun isWebUiAuthRequired(context: Context): Boolean =
@@ -187,6 +201,7 @@ object AppSettings {
         val upnpPort: Int,
         val webUiEnabled: Boolean,
         val webUiPort: Int,
+        val webUiLastBoundPort: Int?,
         val webUiAuthRequired: Boolean,
         val autoStartOnBoot: Boolean,
         val deviceNameOverride: String?
@@ -203,6 +218,7 @@ object AppSettings {
         upnpPort = getUpnpPort(context),
         webUiEnabled = isWebUiEnabled(context),
         webUiPort = getWebUiPort(context),
+        webUiLastBoundPort = getWebUiLastBoundPort(context),
         webUiAuthRequired = isWebUiAuthRequired(context),
         autoStartOnBoot = isAutoStartOnBoot(context),
         deviceNameOverride = getDeviceNameOverride(context)

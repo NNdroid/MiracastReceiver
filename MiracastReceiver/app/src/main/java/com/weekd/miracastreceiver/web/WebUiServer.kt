@@ -6,6 +6,7 @@ import android.os.Build
 import com.weekd.miracastreceiver.BuildConfig
 import com.weekd.miracastreceiver.discovery.DeviceInfoProvider
 import com.weekd.miracastreceiver.ui.PlayerActivity
+import com.weekd.miracastreceiver.ui.UrlPlaybackActivity
 import com.weekd.miracastreceiver.util.AppSettings
 import com.weekd.miracastreceiver.util.PrivilegedAccess
 import com.weekd.miracastreceiver.utils.CodecUtils
@@ -29,6 +30,7 @@ import java.net.Socket
 import java.net.SocketException
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.Semaphore
 
 /** Small authenticated LAN WebUI/API server. */
 class WebUiServer(
@@ -39,6 +41,7 @@ class WebUiServer(
 ) {
     private val appContext = context.applicationContext
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val clientSlots = Semaphore(MAX_CONCURRENT_CLIENTS, true)
     private var serverSocket: ServerSocket? = null
     private var acceptJob: Job? = null
 
@@ -73,7 +76,26 @@ class WebUiServer(
                         if (!socket.isClosed) Timber.w(e, "WebUI accept failed")
                         break
                     }
-                    launch { handleClient(client) }
+                    if (!clientSlots.tryAcquire()) {
+                        runCatching {
+                            client.use {
+                                it.soTimeout = 1_000
+                                sendJson(
+                                    it.getOutputStream(),
+                                    503,
+                                    JSONObject().put("error", "too_many_connections")
+                                )
+                            }
+                        }
+                        continue
+                    }
+                    launch {
+                        try {
+                            handleClient(client)
+                        } finally {
+                            clientSlots.release()
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 RuntimeState.lastError = "WebUI: ${e.message.orEmpty()}"
@@ -157,6 +179,7 @@ class WebUiServer(
                     }
                     method == "POST" && path == "/api/config" -> handleConfig(output, body)
                     method == "POST" && path == "/api/actions/player" -> handlePlayerAction(output, body)
+                    method == "POST" && path == "/api/actions/open-url" -> handleOpenUrl(output, body)
                     method == "POST" && path == "/api/actions/restart" -> {
                         sendJson(output, 200, JSONObject().put("ok", true))
                         onRestartReceiverRequested()
@@ -268,6 +291,59 @@ class WebUiServer(
         return AppSettings.getWebUiLastBoundPort(appContext) ?: requestedPort
     }
 
+    private fun handleOpenUrl(output: OutputStream, body: String) {
+        val json = runCatching { JSONObject(body) }.getOrElse {
+            return sendJson(output, 400, JSONObject().put("error", "invalid_json"))
+        }
+        val headerObject = json.optJSONObject("headers")
+        val rawHeaders = linkedMapOf<String, String>()
+        headerObject?.keys()?.forEach { key -> rawHeaders[key] = headerObject.optString(key) }
+
+        val request = runCatching {
+            MediaUrlRequest.parse(
+                url = json.optString("url"),
+                title = json.optString("title"),
+                headers = rawHeaders
+            )
+        }.getOrElse {
+            return sendJson(output, 400, JSONObject().put("error", it.message ?: "invalid_media_request"))
+        }
+
+        appContext.sendBroadcast(Intent(PlayerActivity.ACTION_STOP).setPackage(appContext.packageName))
+        val intent = Intent(appContext, UrlPlaybackActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            putExtra(UrlPlaybackActivity.EXTRA_URL, request.url)
+            putExtra(UrlPlaybackActivity.EXTRA_TITLE, request.title)
+            putExtra(UrlPlaybackActivity.EXTRA_HEADERS_JSON, JSONObject(request.headers).toString())
+        }
+        val started = runCatching { appContext.startActivity(intent) }
+        if (started.isFailure) {
+            val error = started.exceptionOrNull()?.message.orEmpty()
+            RuntimeState.lastError = "URL playback launch failed: $error"
+            return sendJson(output, 500, JSONObject().put("error", "player_launch_failed").put("detail", error))
+        }
+
+        RuntimeState.updatePlayback {
+            it.copy(
+                state = "LAUNCHING",
+                title = request.title.ifBlank { request.url },
+                uri = request.url,
+                source = "WEB_URL",
+                error = "",
+                retryAttempt = 0
+            )
+        }
+        sendJson(
+            output,
+            200,
+            JSONObject()
+                .put("ok", true)
+                .put("url", request.url)
+                .put("title", request.title)
+                .put("headerCount", request.headers.size)
+        )
+    }
+
     private fun handlePlayerAction(output: OutputStream, body: String) {
         val json = runCatching { JSONObject(body) }.getOrElse {
             return sendJson(output, 400, JSONObject().put("error", "invalid_json"))
@@ -296,6 +372,7 @@ class WebUiServer(
     private fun buildStatus(): JSONObject {
         val deviceInfo = DeviceInfoProvider(appContext)
         val privileged = PrivilegedAccess.getStatus(appContext)
+        val playback = RuntimeState.playbackSnapshot()
         val now = System.currentTimeMillis()
         val preferredPort = AppSettings.getWebUiPort(appContext)
         val runtimePort = RuntimeState.webUiPort.takeIf { it > 0 } ?: AppSettings.getWebUiLastBoundPort(appContext) ?: preferredPort
@@ -330,14 +407,16 @@ class WebUiServer(
                 .put("client", RuntimeState.miracastClient)
                 .put("rtpPort", RuntimeState.miracastRtpPort))
             .put("playback", JSONObject()
-                .put("state", RuntimeState.playbackState)
-                .put("title", RuntimeState.playbackTitle)
-                .put("uri", RuntimeState.playbackUri)
-                .put("positionMs", RuntimeState.playbackPositionMs)
-                .put("durationMs", RuntimeState.playbackDurationMs)
-                .put("speed", RuntimeState.playbackSpeed.toDouble())
-                .put("volume", RuntimeState.playbackVolume)
-                .put("source", RuntimeState.playbackSource)
+                .put("state", playback.state)
+                .put("title", playback.title)
+                .put("uri", playback.uri)
+                .put("positionMs", playback.positionMs)
+                .put("durationMs", playback.durationMs)
+                .put("speed", playback.speed.toDouble())
+                .put("volume", playback.volume)
+                .put("source", playback.source)
+                .put("error", playback.error)
+                .put("retryAttempt", playback.retryAttempt)
                 .put("decoder", RuntimeState.decoderName())
                 .put("hardwareDecoder", RuntimeState.decoderHardwareAccelerated()))
             .put("privileged", JSONObject()
@@ -396,6 +475,9 @@ class WebUiServer(
                 .put("miracastRtsp", MIRACAST_RTSP_PORT))
             .put("limits", JSONObject()
                 .put("maxRequestBodyBytes", MAX_BODY_BYTES)
+                .put("maxConcurrentClients", MAX_CONCURRENT_CLIENTS)
+                .put("maxMediaUrlLength", MediaUrlRequest.MAX_URL_LENGTH)
+                .put("maxMediaHeaders", MediaUrlRequest.MAX_HEADERS)
                 .put("logEntries", WebLogBuffer.snapshot(600).size))
     }
 
@@ -445,6 +527,7 @@ class WebUiServer(
             404 -> "Not Found"
             413 -> "Payload Too Large"
             431 -> "Request Header Fields Too Large"
+            503 -> "Service Unavailable"
             else -> "Internal Server Error"
         }
         val header = buildString {
@@ -508,5 +591,6 @@ class WebUiServer(
         private const val MAX_HEADER_LINE = 8 * 1024
         private const val MAX_HEADER_BYTES = 32 * 1024
         private const val MAX_BODY_BYTES = 256 * 1024
+        private const val MAX_CONCURRENT_CLIENTS = 24
     }
 }

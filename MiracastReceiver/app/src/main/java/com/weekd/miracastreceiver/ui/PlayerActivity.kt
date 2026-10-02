@@ -46,9 +46,7 @@ import kotlinx.coroutines.withContext
 import timber.log.Timber
 import java.net.URL
 
-/**
- * 投屏播放页面
- */
+/** 投屏播放页面。 */
 class PlayerActivity : AppCompatActivity() {
 
     companion object {
@@ -121,6 +119,7 @@ class PlayerActivity : AppCompatActivity() {
     private var mediaReadyAtMs = 0L
     private var lastDecoderName = ""
     private var lastDecoderInitDurationMs = -1L
+    private var droppedVideoFrames = 0L
 
     private val streamInfoTracker = StreamInfoTracker()
     private var streamInfoJob: Job? = null
@@ -210,11 +209,8 @@ class PlayerActivity : AppCompatActivity() {
         }
         val loadControl = DefaultLoadControl.Builder()
             .apply {
-                if (lowLatency) {
-                    setBufferDurationsMs(1_000, 8_000, 500, 1_000)
-                } else {
-                    setBufferDurationsMs(2_000, 20_000, 450, 1_000)
-                }
+                if (lowLatency) setBufferDurationsMs(1_000, 8_000, 500, 1_000)
+                else setBufferDurationsMs(2_000, 20_000, 450, 1_000)
                 setPrioritizeTimeOverSizeThresholds(true)
             }
             .build()
@@ -311,6 +307,14 @@ class PlayerActivity : AppCompatActivity() {
                         lastDecoderName = decoderName
                         lastDecoderInitDurationMs = initializationDurationMs
                         Timber.d("Video decoder initialized name=$decoderName duration=${initializationDurationMs}ms")
+                    }
+
+                    override fun onDroppedVideoFrames(
+                        eventTime: AnalyticsListener.EventTime,
+                        droppedFrames: Int,
+                        elapsedMs: Long
+                    ) {
+                        droppedVideoFrames += droppedFrames.toLong()
                     }
                 })
             }
@@ -612,6 +616,7 @@ class PlayerActivity : AppCompatActivity() {
             mediaReadyAtMs = 0L
             lastDecoderName = ""
             lastDecoderInitDurationMs = -1L
+            droppedVideoFrames = 0L
             if (playlist.size > 1 && cachedVideoMediaItems.isNotEmpty()) {
                 val videoIndex = cachedVideoIndexByPlaylistIndex.getOrNull(currentIndex)?.takeIf { it >= 0 } ?: 0
                 player?.setMediaItems(cachedVideoMediaItems, videoIndex, 0L)
@@ -753,6 +758,8 @@ class PlayerActivity : AppCompatActivity() {
                     parts += "${videoSize!!.width}×${videoSize.height}"
                 }
                 format?.sampleMimeType?.let { parts += StreamInfoTracker.formatCodec(it) }
+                val hdr = StreamInfoTracker.formatHdr(format)
+                if (hdr != "SDR" && hdr != "SDR / 未标记" && hdr != "—") parts += hdr
                 format?.frameRate?.takeIf { it > 0f }?.let { parts += StreamInfoTracker.formatFps(it) }
                 val bitrateBps = listOfNotNull(format?.bitrate, format?.averageBitrate, format?.peakBitrate)
                     .firstOrNull { it != Format.NO_VALUE }?.toLong() ?: 0L
@@ -808,13 +815,21 @@ class PlayerActivity : AppCompatActivity() {
         val bufferedMs = ((currentPlayer?.bufferedPosition ?: 0L) - (currentPlayer?.currentPosition ?: 0L)).coerceAtLeast(0L)
         val positionText = if ((currentPlayer?.duration ?: 0L) > 0) {
             "${formatTimeMs(currentPlayer?.currentPosition ?: 0L)} / ${formatTimeMs(currentPlayer?.duration ?: 0L)}"
-        } else "--"
+        } else "直播 / 未知"
         val extras = listOf(
             "来源" to "DLNA / Media",
+            "HDR" to StreamInfoTracker.formatHdr(format),
+            "色彩空间" to StreamInfoTracker.formatColorSpace(format),
+            "色深" to StreamInfoTracker.formatBitDepth(format),
+            "色彩范围" to StreamInfoTracker.formatColorRange(format),
             "音频编码" to StreamInfoTracker.formatCodec(audioFormat?.sampleMimeType),
-            "解码器" to lastDecoderName.ifBlank { "--" },
-            "解码初始化" to if (lastDecoderInitDurationMs >= 0) "${lastDecoderInitDurationMs} ms" else "--",
-            "缓冲" to formatTimeMs(bufferedMs),
+            "音频声道" to StreamInfoTracker.formatAudioChannels(audioFormat),
+            "采样率" to StreamInfoTracker.formatSampleRate(audioFormat),
+            "解码器" to lastDecoderName.ifBlank { "—" },
+            "解码初始化" to if (lastDecoderInitDurationMs >= 0) "${lastDecoderInitDurationMs} ms" else "—",
+            "缓冲时长" to formatTimeMs(bufferedMs),
+            "缓冲比例" to StreamInfoTracker.formatBufferPercent(currentPlayer?.bufferedPercentage ?: -1),
+            "掉帧" to droppedVideoFrames.toString(),
             "进度" to positionText,
             "播放速度" to String.format("%.2fx", currentPlayer?.playbackParameters?.speed ?: currentSpeed)
         )

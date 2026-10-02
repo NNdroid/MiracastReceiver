@@ -21,8 +21,8 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultDataSource
-import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
+import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -33,8 +33,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import okhttp3.ConnectionPool
+import okhttp3.OkHttpClient
 import org.json.JSONObject
 import timber.log.Timber
+import java.util.concurrent.TimeUnit
 
 /** Media3 player used for authenticated WebUI HTTP/HTTPS URL pushes. */
 class UrlPlaybackActivity : AppCompatActivity() {
@@ -79,6 +82,21 @@ class UrlPlaybackActivity : AppCompatActivity() {
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var waitingForNetwork = false
     private var loadStartedAtMs = 0L
+
+    // Keep one transport pool for the entire Activity. HLS/DASH fan out from manifest -> init/media
+    // segments, so connection/TLS reuse and HTTP/2 multiplexing reduce first-frame and channel-switch
+    // overhead compared with repeatedly opening independent URLConnection-style connections.
+    private val httpClient: OkHttpClient by lazy {
+        OkHttpClient.Builder()
+            .connectTimeout(6, TimeUnit.SECONDS)
+            .readTimeout(12, TimeUnit.SECONDS)
+            .writeTimeout(12, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
+            .followRedirects(true)
+            .followSslRedirects(true)
+            .connectionPool(ConnectionPool(8, 5, TimeUnit.MINUTES))
+            .build()
+    }
 
     private val controlReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -183,10 +201,7 @@ class UrlPlaybackActivity : AppCompatActivity() {
         releasePlayer()
         configuredHeaders = requestHeaders.toMap()
 
-        val httpFactory = DefaultHttpDataSource.Factory()
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(6_000)
-            .setReadTimeoutMs(12_000)
+        val httpFactory = OkHttpDataSource.Factory(httpClient)
             .setUserAgent(requestHeaders["User-Agent"] ?: "MiracastReceiver/${Build.VERSION.RELEASE}")
             .setDefaultRequestProperties(requestHeaders.filterKeys { !it.equals("User-Agent", true) })
         val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)

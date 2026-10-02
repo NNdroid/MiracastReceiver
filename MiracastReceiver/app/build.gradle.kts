@@ -127,9 +127,10 @@ dependencies {
     implementation("com.squareup.retrofit2:converter-gson:2.11.0")
     implementation("com.google.code.gson:gson:2.11.0")
 
-    // Official Google Cast Connect receiver libraries for Android TV.
-    implementation("com.google.android.gms:play-services-cast-tv:21.1.1")
-    implementation("com.google.android.gms:play-services-cast:22.3.1")
+    // Google Cast Connect versions compatible with minSdk 21. Google raised the sender Cast
+    // library minSdk to 23 in the 22.x line, while 21.4.0 / Cast TV 21.0.1 require only API 19.
+    implementation("com.google.android.gms:play-services-cast-tv:21.0.1")
+    implementation("com.google.android.gms:play-services-cast:21.4.0")
 
     // 1.9+ raises Media3 minSdk to 23. Keep the newest stable line compatible with our minSdk 21.
     val media3Version = "1.8.1"

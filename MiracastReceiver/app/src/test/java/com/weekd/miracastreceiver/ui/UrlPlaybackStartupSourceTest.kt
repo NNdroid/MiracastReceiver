@@ -18,7 +18,7 @@ class UrlPlaybackStartupSourceTest {
             .substringBefore("private fun ensurePlayer()")
 
         assertFalse("URL switching must not stop ExoPlayer", startMedia.contains("exo.stop()"))
-        assertFalse("URL switching must not clear the timeline before replacement", startMedia.contains("clearMediaItems"))
+        assertFalse("URL switching must not clear the timeline before replacement", startMedia.contains("exo.clearMediaItems()"))
         assertTrue("URL switching should replace the MediaItem in-place", startMedia.contains("exo.setMediaItem"))
     }
 

@@ -85,6 +85,15 @@
             android:screenOrientation="sensorLandscape"
             android:theme="@style/Theme.Leanback.Fullscreen" />
 
+        <!-- WebUI HTTP/HLS/DASH URL 播放 Activity；与实时镜像路径隔离，便于独立重试。 -->
+        <activity
+            android:name=".ui.UrlPlaybackActivity"
+            android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize"
+            android:exported="false"
+            android:launchMode="singleTask"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@style/Theme.Leanback.Fullscreen" />
+
         <!-- 连接确认 Activity -->
         <activity
             android:name=".ui.ConnectActivity"

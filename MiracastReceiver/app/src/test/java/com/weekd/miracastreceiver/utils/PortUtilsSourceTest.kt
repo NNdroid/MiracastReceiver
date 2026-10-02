@@ -17,9 +17,11 @@ class PortUtilsSourceTest {
     }
 
     @Test
-    fun dualStackBinderPreflightsIpv4BeforeIpv6ClaimsThePort() {
+    fun dualStackBinderPreflightsAndVerifiesIpv4BeforeTrustingIpv6Wildcard() {
         assertTrue(source.contains("ipv4WasAvailable"))
         assertTrue(source.contains("tryBindIpv4(port, 1)"))
-        assertTrue(source.contains("IPv6 wildcard (dual-stack IPv4-mapped expected)"))
+        assertTrue(source.contains("probeTcp(IPV4_LOOPBACK, port)"))
+        assertTrue(source.contains("verified IPv6 wildcard dual-stack"))
+        assertTrue(source.contains("rebinding with IPv4 priority"))
     }
 }

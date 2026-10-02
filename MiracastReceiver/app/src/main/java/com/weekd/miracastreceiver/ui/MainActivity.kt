@@ -31,6 +31,7 @@ class MainActivity : AppCompatActivity() {
 
     private val backPressExitGate = BackPressExitGate()
     private var currentDestination = Destination.HOME
+    private var pendingDestination: Pair<Destination, Boolean>? = null
     private lateinit var navItems: List<Pair<Destination, TextView>>
 
     companion object {
@@ -55,16 +56,60 @@ class MainActivity : AppCompatActivity() {
         if (savedInstanceState == null) {
             showDestination(Destination.HOME, moveFocus = true)
         } else {
-            currentDestination = supportFragmentManager.fragments.firstOrNull { !it.isHidden }?.let {
-                when (it) {
-                    is SettingsFragment -> Destination.SETTINGS
-                    is PlayerHubFragment -> Destination.PLAYER
-                    is AboutFragment -> Destination.ABOUT
-                    else -> Destination.HOME
-                }
-            } ?: Destination.HOME
+            currentDestination = restoredDestination()
+            repairRestoredFragments(currentDestination)
             updateNavigationSelection()
+            navItems.firstOrNull { it.first == currentDestination }?.second?.post { view ->
+                if (!isFinishing && !isDestroyed) view.requestFocus()
+            }
         }
+    }
+
+    override fun onPostResume() {
+        super.onPostResume()
+        pendingDestination?.let { (destination, moveFocus) ->
+            pendingDestination = null
+            showDestination(destination, moveFocus)
+        }
+    }
+
+    private fun restoredDestination(): Destination {
+        val visible = supportFragmentManager.fragments.firstOrNull { it.isAdded && !it.isHidden }
+        return when (visible) {
+            is SettingsFragment -> Destination.SETTINGS
+            is PlayerHubFragment -> Destination.PLAYER
+            is AboutFragment -> Destination.ABOUT
+            else -> Destination.HOME
+        }
+    }
+
+    private fun repairRestoredFragments(destination: Destination) {
+        val manager = supportFragmentManager
+        if (manager.isStateSaved || isFinishing || isDestroyed) return
+        val target = manager.findFragmentByTag(destination.name)
+            ?: manager.fragments.firstOrNull { fragment ->
+                when (destination) {
+                    Destination.HOME -> fragment is HomeFragment
+                    Destination.PLAYER -> fragment is PlayerHubFragment
+                    Destination.SETTINGS -> fragment is SettingsFragment
+                    Destination.ABOUT -> fragment is AboutFragment
+                }
+            }
+            ?: return
+
+        runCatching {
+            val transaction = manager.beginTransaction().setReorderingAllowed(true)
+            manager.fragments.filter { it.isAdded }.forEach { fragment ->
+                if (fragment == target) {
+                    transaction.show(fragment)
+                    transaction.setMaxLifecycle(fragment, Lifecycle.State.RESUMED)
+                } else {
+                    transaction.hide(fragment)
+                    transaction.setMaxLifecycle(fragment, Lifecycle.State.CREATED)
+                }
+            }
+            transaction.commit()
+        }.onFailure { Timber.w(it, "Unable to normalize restored TV fragments") }
     }
 
     private fun setupNavigation() {
@@ -97,6 +142,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun showDestination(destination: Destination, moveFocus: Boolean) {
         val manager = supportFragmentManager
+        if (isFinishing || isDestroyed) return
+        if (manager.isStateSaved) {
+            pendingDestination = destination to moveFocus
+            Timber.d("Deferring TV navigation to $destination until Activity resumes")
+            return
+        }
+
         val existing = manager.findFragmentByTag(destination.name)
         if (destination == currentDestination && existing != null && !existing.isHidden) {
             if (!moveFocus) (existing as? TvPage)?.requestInitialFocus()
@@ -104,27 +156,33 @@ class MainActivity : AppCompatActivity() {
         }
 
         val target = existing ?: fragmentFor(destination)
-        val transaction = manager.beginTransaction().setReorderingAllowed(true)
-        manager.fragments.forEach { fragment ->
-            if (fragment != target) {
-                transaction.hide(fragment)
-                transaction.setMaxLifecycle(fragment, Lifecycle.State.CREATED)
+        runCatching {
+            val transaction = manager.beginTransaction().setReorderingAllowed(true)
+            manager.fragments.filter { it.isAdded }.forEach { fragment ->
+                if (fragment != target) {
+                    transaction.hide(fragment)
+                    transaction.setMaxLifecycle(fragment, Lifecycle.State.CREATED)
+                }
             }
-        }
-        if (target.isAdded) transaction.show(target)
-        else transaction.add(R.id.fragment_container, target, destination.name)
-        transaction.setMaxLifecycle(target, Lifecycle.State.RESUMED)
+            if (target.isAdded) transaction.show(target)
+            else transaction.add(R.id.fragment_container, target, destination.name)
+            transaction.setMaxLifecycle(target, Lifecycle.State.RESUMED)
 
-        currentDestination = destination
-        transaction.runOnCommit {
-            if (!moveFocus) (target as? TvPage)?.requestInitialFocus()
-        }
-        transaction.commit()
-        updateNavigationSelection()
+            currentDestination = destination
+            transaction.runOnCommit {
+                if (!moveFocus && !isFinishing && !isDestroyed) (target as? TvPage)?.requestInitialFocus()
+            }
+            transaction.commit()
+            updateNavigationSelection()
 
-        if (moveFocus) {
-            val navView = navItems.first { it.first == destination }.second
-            navView.post { navView.requestFocus() }
+            if (moveFocus) {
+                navItems.firstOrNull { it.first == destination }?.second?.post { view ->
+                    if (!isFinishing && !isDestroyed) view.requestFocus()
+                }
+            }
+        }.onFailure {
+            Timber.e(it, "Unable to navigate to $destination")
+            pendingDestination = destination to moveFocus
         }
     }
 
@@ -139,10 +197,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     fun requestWifiDirectPermissions() {
+        if (isFinishing || isDestroyed) return
         val missing = WIFI_DIRECT_PERMISSIONS.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
-        if (missing.isNotEmpty()) ActivityCompat.requestPermissions(this, missing.toTypedArray(), REQUEST_CODE_WIFI_DIRECT)
+        if (missing.isNotEmpty()) {
+            runCatching {
+                ActivityCompat.requestPermissions(this, missing.toTypedArray(), REQUEST_CODE_WIFI_DIRECT)
+            }.onFailure { Timber.w(it, "Unable to request Wi-Fi Direct permissions") }
+        }
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {

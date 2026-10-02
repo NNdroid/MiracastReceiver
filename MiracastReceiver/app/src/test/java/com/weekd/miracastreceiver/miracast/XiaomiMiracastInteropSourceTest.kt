@@ -37,11 +37,14 @@ class XiaomiMiracastInteropSourceTest {
     }
 
     @Test
-    fun mandatoryWfdBaselineCapabilitiesAreAdvertised() {
-        assertTrue(session.contains("LPCM 00000002 00"))
-        assertTrue(session.contains("AAC 00000001 00"))
-        assertTrue(session.contains("000001C1"))
+    fun broadR1CapabilitiesRemainCompatibleWithXiaomiAndAndroid() {
+        assertTrue(session.contains("LPCM 00000003 00"))
+        assertTrue(session.contains("AAC 0000000F 00"))
+        assertTrue(session.contains("0001FFFF"))
+        assertTrue(session.contains("1FFFFFFF"))
         assertTrue(session.contains("00 00 03 10"))
+        assertTrue(session.contains("androidLikeSource"))
+        assertTrue(session.contains("second PLAY"))
     }
 
     @Test

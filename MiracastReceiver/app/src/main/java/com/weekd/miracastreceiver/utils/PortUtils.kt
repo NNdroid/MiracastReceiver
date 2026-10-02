@@ -18,6 +18,7 @@ object PortUtils {
     private const val RANDOM_PORT_MIN = 20_000
     private const val RANDOM_PORT_MAX = 60_000
     private const val RANDOM_ATTEMPTS = 48
+    private const val LOOPBACK_PROBE_TIMEOUT_MS = 220
     private val random = SecureRandom()
 
     fun findAvailablePort(
@@ -124,7 +125,7 @@ object PortUtils {
                 }
             }
         }
-        throw IllegalStateException("Unable to bind a dual-stack TCP port")
+        throw IllegalStateException("Unable to bind a TCP port")
     }
 
     fun isTcpPortAvailable(port: Int): Boolean {
@@ -132,26 +133,57 @@ object PortUtils {
         return tryBindIpv4(port, 1)?.use { true } ?: false
     }
 
+    /**
+     * Android kernels and vendor networking stacks do not agree on IPV6_V6ONLY defaults.
+     * A successful bind to :: therefore does not prove that 127.0.0.1 can reach that listener.
+     * Verify the IPv4 path explicitly before treating one IPv6 socket as dual-stack.
+     */
     private fun tryBindDualStack(port: Int, backlog: Int): ServerSocket? {
         if (port !in 1024..65535) return null
 
         val ipv4WasAvailable = tryBindIpv4(port, 1)?.use { true } ?: false
         if (!ipv4WasAvailable) return null
 
-        val ipv6 = tryBind(IPV6_WILDCARD, port, backlog)
-        val ipv4 = tryBindIpv4(port, backlog)
+        var ipv6 = tryBind(IPV6_WILDCARD, port, backlog)
+        var ipv4 = tryBindIpv4(port, backlog)
+
+        if (ipv6 != null && ipv4 == null) {
+            if (probeTcp(IPV4_LOOPBACK, port)) {
+                Timber.i("TCP listener port $port verified IPv4 through IPv6 wildcard")
+                return ipv6
+            }
+
+            // Some Android/vendor kernels reserve the IPv4 port after binding :: even when the
+            // socket is effectively IPv6-only. Rebind in the opposite order so IPv4 management
+            // access is never lost merely because IPv6 happened to bind first.
+            Timber.w("IPv6 wildcard on port $port did not accept IPv4; rebinding with IPv4 priority")
+            runCatching { ipv6.close() }
+            ipv6 = null
+            ipv4 = tryBindIpv4(port, backlog) ?: return null
+            ipv6 = tryBind(IPV6_WILDCARD, port, backlog)
+        }
+
         if (ipv6 == null && ipv4 == null) return null
 
         val physicalSockets = listOfNotNull(ipv6, ipv4)
         val mode = when {
             ipv6 != null && ipv4 != null -> "separate IPv6 + IPv4 sockets"
-            ipv6 != null -> "IPv6 wildcard (dual-stack IPv4-mapped expected)"
+            ipv6 != null -> "verified IPv6 wildcard dual-stack"
             else -> "IPv4-only fallback (IPv6 unavailable on platform)"
         }
         Timber.i("TCP listener bound on port $port using $mode")
 
         return if (physicalSockets.size == 1) physicalSockets.first()
         else MultiplexingServerSocket(port, physicalSockets)
+    }
+
+    private fun probeTcp(address: InetAddress, port: Int): Boolean = try {
+        Socket().use { socket ->
+            socket.connect(InetSocketAddress(address, port), LOOPBACK_PROBE_TIMEOUT_MS)
+        }
+        true
+    } catch (_: Exception) {
+        false
     }
 
     private fun tryBindIpv4(port: Int, backlog: Int): ServerSocket? =
@@ -172,6 +204,7 @@ object PortUtils {
 
     private val IPV4_WILDCARD: InetAddress by lazy { InetAddress.getByName("0.0.0.0") }
     private val IPV6_WILDCARD: InetAddress by lazy { InetAddress.getByName("::") }
+    private val IPV4_LOOPBACK: InetAddress by lazy { InetAddress.getByName("127.0.0.1") }
 
     /** A ServerSocket facade that merges accepts from IPv4 and IPv6 physical listeners. */
     private class MultiplexingServerSocket(

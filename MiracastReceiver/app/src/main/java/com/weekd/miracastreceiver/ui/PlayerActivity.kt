@@ -118,6 +118,7 @@ class PlayerActivity : AppCompatActivity() {
     private var isAirPlayMirrorSession = false
     private var mirrorAspectJob: Job? = null
     private var currentSpeed = 1f
+    private var mediaLoadStartedAtMs = 0L
 
     // 视频流信息面板
     private val streamInfoTracker = StreamInfoTracker()
@@ -175,7 +176,8 @@ class PlayerActivity : AppCompatActivity() {
         setContentView(R.layout.activity_player)
 
         initViews()
-        initPlayer()
+        // Do not construct ExoPlayer eagerly. AirPlay and Miracast mirror sessions render directly
+        // to mirrorSurfaceView, and image-only sessions also do not need a decoder/player at all.
         handleIntent(intent)
         registerControlReceiver()
 
@@ -200,10 +202,13 @@ class PlayerActivity : AppCompatActivity() {
         bufferingIndicator = findViewById(R.id.buffering_indicator)
     }
 
+    private fun ensurePlayer() {
+        if (player == null) initPlayer()
+    }
+
     /**
      * @param lowLatency 实时投屏（Miracast）用。默认的缓冲策略是为点播设计的
-     *   （起播要缓冲 2.5 秒、重缓冲后要 5 秒），而实时流的数据严格按实时速率到达，
-     *   永远攒不出那么多缓冲，会陷入「解几帧 → 缓冲耗尽 → 转圈」的循环。
+     *   （起播要缓冲较长时间），而实时流的数据严格按实时速率到达。
      */
     private fun initPlayer(lowLatency: Boolean = false) {
         player?.release()
@@ -218,17 +223,23 @@ class PlayerActivity : AppCompatActivity() {
         val loadControl = DefaultLoadControl.Builder()
             .apply {
                 if (lowLatency) {
-                    // maxBufferMs 不能压太小：到达上限后 ExoPlayer 会停止读取数据源，
-                    // 而 RTP 仍按实时速率灌进管道，管道溢出丢数据就会把 TS 流打出空洞，
-                    // 解码器拿不到完整 PES 直接黑屏。留出足够余量让它持续排空管道。
                     setBufferDurationsMs(
                         /* minBufferMs = */ 1_000,
                         /* maxBufferMs = */ 8_000,
                         /* bufferForPlaybackMs = */ 500,
                         /* bufferForPlaybackAfterRebufferMs = */ 1_000
                     )
-                    setPrioritizeTimeOverSizeThresholds(true)
+                } else {
+                    // LAN/DLNA fast-start profile: start quickly but keep enough forward buffer for
+                    // bursty HTTP/HLS sources after the first frame is already on screen.
+                    setBufferDurationsMs(
+                        /* minBufferMs = */ 2_000,
+                        /* maxBufferMs = */ 20_000,
+                        /* bufferForPlaybackMs = */ 450,
+                        /* bufferForPlaybackAfterRebufferMs = */ 1_000
+                    )
                 }
+                setPrioritizeTimeOverSizeThresholds(true)
             }
             .build()
 
@@ -248,6 +259,10 @@ class PlayerActivity : AppCompatActivity() {
                             }
                             Player.STATE_READY -> {
                                 Timber.d("Player state: READY")
+                                if (mediaLoadStartedAtMs > 0L) {
+                                    Timber.i("DLNA/media playback ready in ${SystemClock.elapsedRealtime() - mediaLoadStartedAtMs}ms")
+                                    mediaLoadStartedAtMs = 0L
+                                }
                                 tvError.visibility = View.GONE
                                 tvStatus.text = getString(R.string.playing)
                                 adaptOrientationToVideo()
@@ -263,8 +278,6 @@ class PlayerActivity : AppCompatActivity() {
                     }
 
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
-                        // 缓冲中 isPlaying 也是 false，此时别把 onPlaybackStateChanged
-                        // 刚写好的「正在缓冲...」覆盖成「已暂停」，那会让人以为是暂停了
                         tvStatus.text = when {
                             isPlaying -> getString(R.string.playing)
                             playbackState == Player.STATE_READY -> "已暂停"
@@ -280,7 +293,6 @@ class PlayerActivity : AppCompatActivity() {
                         tvError.visibility = View.VISIBLE
                     }
                 })
-                // 视频信息面板的「网速」取自带宽估计（ExoPlayer 默认的 DefaultBandwidthMeter 采样）
                 addAnalyticsListener(object : AnalyticsListener {
                     override fun onBandwidthEstimate(
                         eventTime: AnalyticsListener.EventTime,
@@ -322,7 +334,6 @@ class PlayerActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle("更多")
             .setItems(labels) { _, which ->
-                // 本弹窗关闭后再打开下一级弹窗，否则 onDismiss 会把 isDialogShowing 误置回 false
                 tvStatus.post {
                     when (which) {
                         0 -> toggleStreamInfo()
@@ -340,10 +351,6 @@ class PlayerActivity : AppCompatActivity() {
     private fun formatSpeedLabel(speed: Float): String =
         if (speed == 1f) "1.0x" else "${speed}x"
 
-    /**
-     * 参考 Kodi 的连续快进快退：短时间内连续按键会累加跳转步长并放大跨度，
-     * 松开按键一段时间后再统一提交一次 seek，避免频繁 seek 造成反复缓冲。
-     */
     private fun handleSeekPress(forward: Boolean) {
         if (isCurrentImage() || player == null) return
         val now = SystemClock.elapsedRealtime()
@@ -359,7 +366,6 @@ class PlayerActivity : AppCompatActivity() {
 
         val step = SEEK_STEP_TABLE_MS[seekAccelerationStep]
         pendingSeekDeltaMs += if (forward) step else -step
-
         previewPendingSeek()
 
         seekCommitJob?.cancel()
@@ -404,12 +410,10 @@ class PlayerActivity : AppCompatActivity() {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN && !isDialogShowing) {
-            // 镜像/Miracast 没有控制条，INFO / MENU 键是信息面板的唯一入口
             if (event.keyCode == KeyEvent.KEYCODE_INFO || event.keyCode == KeyEvent.KEYCODE_MENU) {
                 toggleStreamInfo()
                 return true
             }
-            // 面板打开时返回键先关面板，不要直接结束播放
             if (event.keyCode == KeyEvent.KEYCODE_BACK && isStreamInfoVisible) {
                 hideStreamInfo()
                 return true
@@ -424,8 +428,6 @@ class PlayerActivity : AppCompatActivity() {
                 val isHardwareSeekKey = event.keyCode == KeyEvent.KEYCODE_MEDIA_REWIND ||
                     event.keyCode == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD
                 val inSeekMode = SystemClock.elapsedRealtime() - lastSeekPressAt <= SEEK_ACCEL_WINDOW_MS
-                // 方向键仅在 OSD 未显示或正处于连续快进快退中时才拦截用于 seek，
-                // 否则放行给控制条做按钮焦点导航（与 Kodi 行为一致）。
                 if (isHardwareSeekKey || inSeekMode || !isControllerVisible) {
                     handleSeekPress(forward = isForwardKey)
                     return true
@@ -496,13 +498,6 @@ class PlayerActivity : AppCompatActivity() {
         publishMirrorSurface()
     }
 
-    /**
-     * 把镜像 SurfaceView 的 Surface 发布给解码器。AirPlay 镜像和 Miracast 共用这一块
-     * Surface —— 两者都是「解码器直接送显」的实时镜像，不经过 ExoPlayer。
-     *
-     * 应用切后台时 SurfaceView 会销毁 Surface、回到前台再造一个新的，所以必须持续跟踪
-     * 变化并置空，否则解码器会往失效的 Surface 上写，画面一直黑。
-     */
     private fun publishMirrorSurface() {
         val waitingText = if (isMiracastSession) "等待 Windows 画面..." else "等待 AirPlay 显示画面..."
         val activeText = if (isMiracastSession) "正在接收 Windows 屏幕..." else "正在接收 iPhone 屏幕..."
@@ -564,20 +559,11 @@ class PlayerActivity : AppCompatActivity() {
         Timber.i("AirPlay mirror aspect-fit: video=${videoW}x$videoH view=${targetW}x$targetH parent=${parentW}x$parentH")
     }
 
-    /**
-     * Miracast 显示。RTP 接收、TS 解复用和解码都由
-     * [com.weekd.miracastreceiver.miracast.WfdServer] 那条链路完成，这里只负责把镜像
-     * Surface 交出去 —— 和 AirPlay 镜像完全同一套机制。
-     *
-     * 刻意不经过 ExoPlayer：播放器的缓冲和时钟同步会引入秒级延迟（实测超过 10 秒），
-     * 而第二屏幕这种用途要的是「收到即解码、解完即送显」。
-     */
     private fun startMiracastPlayback(rtpPort: Int, sessionId: String?) {
         Timber.i("Starting Miracast display: rtpPort=$rtpPort session=$sessionId")
         isMiracastSession = true
         isAirPlayMirrorSession = false
         streamInfoTracker.reset()
-        // 画面不经过 ExoPlayer，PlayerView 的自动常亮不生效，必须手动保持，否则电视会进屏保
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         stopImageSlideShow()
 
@@ -598,21 +584,23 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun playMedia(uri: String) {
         Timber.i("Playing media: $uri")
+        ensurePlayer()
         isMiracastSession = false
         isAirPlayMirrorSession = false
         streamInfoTracker.reset()
         stopImageSlideShow()
+        mirrorSurfaceView.visibility = View.GONE
         imageView.visibility = View.GONE
         playerView.visibility = View.VISIBLE
+        playerView.player = player
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
 
         try {
             tvError.visibility = View.GONE
             updateBufferingState(true)
+            mediaLoadStartedAtMs = SystemClock.elapsedRealtime()
 
-            // 根据 URI 判断媒体类型
             val mediaItem = createMediaItem(uri)
-
             val items = playlist.mapIndexedNotNull { index, itemUri ->
                 if (!isImageUri(itemUri)) {
                     createMediaItem(itemUri).also { if (index == currentIndex) mediaUri = itemUri }
@@ -624,8 +612,8 @@ class PlayerActivity : AppCompatActivity() {
             } else {
                 player?.setMediaItem(mediaItem)
             }
+            player?.playWhenReady = true
             player?.prepare()
-            player?.play()
         } catch (e: Exception) {
             Timber.e(e, "Error playing media")
             tvStatus.text = "播放错误"
@@ -636,17 +624,14 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun createMediaItem(uri: String): MediaItem {
-        // 检测 HLS 流
         val isHls = uri.contains(".m3u8") || uri.contains("/playlist/m3u8")
 
         return if (isHls) {
-            // HLS 流：明确指定 MIME 类型
             MediaItem.Builder()
                 .setUri(uri)
                 .setMimeType(MimeTypes.APPLICATION_M3U8)
                 .build()
         } else {
-            // 其他格式：让 ExoPlayer 自动检测
             MediaItem.fromUri(uri)
         }
     }
@@ -655,6 +640,7 @@ class PlayerActivity : AppCompatActivity() {
         Timber.i("Showing image: $uri")
         player?.pause()
         playerView.visibility = View.GONE
+        mirrorSurfaceView.visibility = View.GONE
         imageView.visibility = View.VISIBLE
         tvError.visibility = View.GONE
         tvStatus.text = "正在显示图片"
@@ -733,8 +719,6 @@ class PlayerActivity : AppCompatActivity() {
         bufferingIndicator.visibility = if (isBuffering) View.VISIBLE else View.GONE
     }
 
-    // ─── 视频流信息面板 ────────────────────────────────────────────────────
-    /** 切换信息面板。镜像/Miracast 没有控制条，只能靠遥控 INFO / MENU 键触发。 */
     private fun toggleStreamInfo() {
         if (isStreamInfoVisible) hideStreamInfo() else showStreamInfo()
     }
@@ -766,7 +750,6 @@ class PlayerActivity : AppCompatActivity() {
         else -> buildExoPlayerStreamInfo()
     }
 
-    /** DLNA / 普通网络播放：分辨率、帧率、码率取自当前视频轨，网速取带宽估计。 */
     private fun buildExoPlayerStreamInfo(): String {
         val currentPlayer = player
         val format = currentPlayer?.videoFormat
@@ -782,12 +765,10 @@ class PlayerActivity : AppCompatActivity() {
         )
     }
 
-    /** AirPlay 镜像：码率只算视频流，网速把音频流字节也算进去。 */
     private fun buildAirPlayStreamInfo(): String {
         val videoBytes = StreamStats.videoBytesTotal
         val totalBytes = videoBytes + StreamStats.audioBytesTotal
         val sample = streamInfoTracker.sample(totalBytes, StreamStats.videoFramesTotal)
-        // 视频码率 = 总码率中扣掉音频部分，按本次采样的视频/总字节比例折算
         val videoShare = if (totalBytes > 0) videoBytes.toDouble() / totalBytes else 1.0
         return streamInfoLines(
             resolution = StreamInfoTracker.formatResolution(StreamStats.videoWidth, StreamStats.videoHeight),
@@ -798,11 +779,6 @@ class PlayerActivity : AppCompatActivity() {
         )
     }
 
-    /**
-     * Miracast：不经过 ExoPlayer，所以分辨率取解码器上报的值（[StreamStats]，由
-     * VideoDecoder 写入），码率和网速取 [RtpReceiver] 的累计字节数。
-     * 帧率暂不统计 —— 解码路径上没有帧计数器。
-     */
     private fun buildMiracastStreamInfo(): String {
         val sample = streamInfoTracker.sample(RtpReceiver.active?.bytesReceived ?: 0L, 0L)
         return streamInfoLines(
@@ -835,13 +811,8 @@ class PlayerActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * 画面实际渲染到屏幕上的像素尺寸。
-     * PlayerView 会按比例把内容框缩到片源宽高比，所以这里拿到的是去掉黑边后的真实显示尺寸；
-     * 镜像模式则读 [fitMirrorSurface] 调整过的镜像 Surface。视图还没测量时退回屏幕分辨率。
-     */
     private fun currentDisplaySize(): Pair<Int, Int> {
-        val renderView = if (isAirPlayMirrorSession) mirrorSurfaceView else playerView.videoSurfaceView
+        val renderView = if (isAirPlayMirrorSession || isMiracastSession) mirrorSurfaceView else playerView.videoSurfaceView
         val width = renderView?.width ?: 0
         val height = renderView?.height ?: 0
         if (width > 0 && height > 0) return width to height
@@ -892,8 +863,6 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun adaptOrientationToVideo() {
-        // TV 端固定横屏显示，竖屏视频由播放器按比例居中渲染。
-        // 不再根据视频宽高切换 Activity 方向，避免 Surface 重建导致竖屏投屏反复缓冲/黑屏。
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
     }
 
@@ -924,7 +893,6 @@ class PlayerActivity : AppCompatActivity() {
             addAction(ACTION_SET_SPEED)
             addAction(ACTION_SET_QUALITY_URL)
         }
-        // 同上：带 flags 的 registerReceiver 是 API 26 起才有的重载
         ContextCompat.registerReceiver(
             this, controlReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED
         )
@@ -934,7 +902,7 @@ class PlayerActivity : AppCompatActivity() {
         super.onStart()
         if (isCurrentImage()) startImageSlideShow() else {
             player?.play()
-            startProgressUpdates()
+            if (player != null) startProgressUpdates()
         }
         if (isStreamInfoVisible) showStreamInfo()
     }
@@ -943,7 +911,6 @@ class PlayerActivity : AppCompatActivity() {
         super.onStop()
         if (isCurrentImage()) stopImageSlideShow() else player?.pause()
         stopProgressUpdates()
-        // 保留 isStreamInfoVisible，回到前台时自动恢复刷新
         streamInfoJob?.cancel()
         streamInfoJob = null
         reportPlaybackPosition()
@@ -979,7 +946,6 @@ class PlayerActivity : AppCompatActivity() {
         val position = currentPlayer.currentPosition
         val duration = currentPlayer.duration.takeIf { it > 0 } ?: 0L
 
-        // 发送广播以更新 DLNA renderer 状态
         val intent = Intent("com.weekd.miracastreceiver.ACTION_UPDATE_POSITION").apply {
             putExtra("position", position)
             putExtra("duration", duration)
@@ -989,10 +955,6 @@ class PlayerActivity : AppCompatActivity() {
         sendBroadcast(intent)
     }
 
-    /**
-     * TV 端本地退出/播放结束时通知 DLNA 渲染器状态归零，
-     * 否则 Emby 会一直认为该设备处于播放中，无法取消投屏或切换到新文件。
-     */
     private fun reportPlaybackStopped() {
         val intent = Intent(ACTION_PLAYBACK_STOPPED).apply {
             setPackage(packageName)
@@ -1013,10 +975,10 @@ class PlayerActivity : AppCompatActivity() {
         streamInfoJob?.cancel()
         streamInfoJob = null
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        // RTP 接收器归 WfdServer 所有（会话结束时由它停止），这里不要碰
         mirrorSurface = null
         player?.release()
         player = null
+        trackSelector = null
         reportPlaybackStopped()
         Timber.i("PlayerActivity destroyed")
     }

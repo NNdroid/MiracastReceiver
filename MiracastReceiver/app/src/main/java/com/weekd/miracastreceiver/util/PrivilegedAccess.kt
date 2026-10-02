@@ -59,19 +59,19 @@ object PrivilegedAccess {
     fun isRootAvailable(): Boolean = runRoot("id").success
 
     fun isShizukuAlive(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return false
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
         return runCatching { Shizuku.pingBinder() }.getOrDefault(false)
     }
 
     fun isShizukuAuthorized(): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return false
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return false
         return runCatching {
             Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
         }.getOrDefault(false)
     }
 
     fun requestShizukuPermission() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return
         if (!isShizukuAlive() || isShizukuAuthorized()) return
         runCatching { Shizuku.requestPermission(SHIZUKU_PERMISSION_REQUEST) }
             .onFailure { Timber.w(it, "Unable to request Shizuku permission") }
@@ -186,8 +186,8 @@ object PrivilegedAccess {
      * Shizuku version removes it, the normal/root paths continue to work unchanged.
      */
     private fun runShizuku(command: String): CommandResult {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
-            return CommandResult(false, error = "Shizuku requires Android 6+")
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            return CommandResult(false, error = "Shizuku 13.1.5 requires Android 7+")
         }
         if (!isShizukuAuthorized()) return CommandResult(false, error = "Shizuku not authorized")
         return try {

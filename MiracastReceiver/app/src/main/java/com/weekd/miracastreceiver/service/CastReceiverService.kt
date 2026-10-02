@@ -73,6 +73,7 @@ class CastReceiverService : Service() {
     private var initialized = false
     private var servicesStarted = false
     private var playerReceiverRegistered = false
+    private var destroying = false
     private val mainHandler = Handler(Looper.getMainLooper())
     private var networkWaitRunnable: Runnable? = null
     private var reconfigureRunnable: Runnable? = null
@@ -191,11 +192,12 @@ class CastReceiverService : Service() {
                 RuntimeState.airPlayState = state.name
                 Timber.i("AirPlay state: $state")
                 if (state == AirPlayState.CONNECTED) {
+                    RuntimeState.playbackState = "MIRRORING"
+                    RuntimeState.playbackSource = "AirPlay"
+                    RuntimeState.playbackTitle = "iPhone 屏幕镜像"
                     setPlaybackSourceActive("airplay", true)
                     if (!airPlayPlayerStarted && AppSettings.isAutoLaunchPlayer(this)) {
                         airPlayPlayerStarted = true
-                        RuntimeState.playbackSource = "AirPlay"
-                        RuntimeState.playbackTitle = "iPhone 屏幕镜像"
                         startActivity(Intent(this, PlayerActivity::class.java).apply {
                             putExtra(PlayerActivity.EXTRA_MEDIA_TITLE, "iPhone 屏幕镜像")
                             putExtra(PlayerActivity.EXTRA_IS_AIRPLAY_MIRROR, true)
@@ -204,6 +206,9 @@ class CastReceiverService : Service() {
                     }
                 } else {
                     setPlaybackSourceActive("airplay", false)
+                    if (RuntimeState.playbackSource == "AirPlay" && activePlaybackSources.isEmpty()) {
+                        RuntimeState.resetPlayback()
+                    }
                     if (airPlayPlayerStarted) {
                         airPlayPlayerStarted = false
                         sendPlayerBroadcast(PlayerActivity.ACTION_STOP)
@@ -211,7 +216,7 @@ class CastReceiverService : Service() {
                 }
             },
             onSenderNameChanged = { sender ->
-                RuntimeState.airPlaySender = sender.orEmpty()
+                RuntimeState.airPlaySender = sender
                 Timber.i("AirPlay sender: $sender")
             }
         )
@@ -260,7 +265,9 @@ class CastReceiverService : Service() {
             onStreamStarted = { rtpPort ->
                 RuntimeState.miracastState = "STREAMING"
                 RuntimeState.miracastRtpPort = rtpPort
+                RuntimeState.playbackState = "MIRRORING"
                 RuntimeState.playbackSource = "Miracast"
+                RuntimeState.playbackTitle = "Windows 无线显示器"
                 setPlaybackSourceActive("miracast", true)
                 Timber.i("Miracast stream started on RTP port: $rtpPort")
             }
@@ -268,6 +275,9 @@ class CastReceiverService : Service() {
                 RuntimeState.miracastState = "IDLE"
                 RuntimeState.miracastRtpPort = 0
                 setPlaybackSourceActive("miracast", false)
+                if (RuntimeState.playbackSource == "Miracast" && activePlaybackSources.isEmpty()) {
+                    RuntimeState.resetPlayback()
+                }
                 Timber.i("Miracast stream stopped, closing player")
                 sendPlayerBroadcast(PlayerActivity.ACTION_STOP)
             }
@@ -315,12 +325,19 @@ class CastReceiverService : Service() {
         }
 
         dlnaRenderer.onPlay = {
+            RuntimeState.playbackState = "PLAYING"
             setPlaybackSourceActive("dlna", true)
             sendPlayerBroadcast(PlayerActivity.ACTION_PLAY)
         }
-        dlnaRenderer.onPause = { sendPlayerBroadcast(PlayerActivity.ACTION_PAUSE) }
+        dlnaRenderer.onPause = {
+            RuntimeState.playbackState = "PAUSED"
+            sendPlayerBroadcast(PlayerActivity.ACTION_PAUSE)
+        }
         dlnaRenderer.onStop = {
             setPlaybackSourceActive("dlna", false)
+            if (RuntimeState.playbackSource == "DLNA" && activePlaybackSources.isEmpty()) {
+                RuntimeState.resetPlayback()
+            }
             sendPlayerBroadcast(PlayerActivity.ACTION_STOP)
         }
         dlnaRenderer.onSeek = { position ->
@@ -382,6 +399,7 @@ class CastReceiverService : Service() {
     }
 
     private fun updateForegroundType() {
+        if (destroying) return
         var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
         if (activePlaybackSources.isNotEmpty()) {
             type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
@@ -544,6 +562,7 @@ class CastReceiverService : Service() {
 
     override fun onDestroy() {
         Timber.i("CastReceiverService destroyed")
+        destroying = true
         networkWaitRunnable?.let { mainHandler.removeCallbacks(it) }
         reconfigureRunnable?.let { mainHandler.removeCallbacks(it) }
         networkWaitRunnable = null

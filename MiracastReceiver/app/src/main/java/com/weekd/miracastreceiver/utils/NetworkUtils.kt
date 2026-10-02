@@ -8,11 +8,21 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import timber.log.Timber
 import java.net.Inet4Address
+import java.net.Inet6Address
+import java.net.InetAddress
 import java.net.NetworkInterface
 import java.security.SecureRandom
 
 /** Network helpers for LAN discovery/casting. */
 object NetworkUtils {
+
+    data class LanAddresses(
+        val ipv4: String? = null,
+        val ipv6: String? = null
+    ) {
+        val preferred: String? get() = ipv4 ?: ipv6
+        val isEmpty: Boolean get() = ipv4 == null && ipv6 == null
+    }
 
     private const val IDENTITY_PREFS = "network_identity"
     private const val KEY_FALLBACK_MAC = "airplay_fallback_mac"
@@ -57,59 +67,73 @@ object NetworkUtils {
         return cm.activeNetworkInfo?.type == ConnectivityManager.TYPE_WIFI
     }
 
-    /**
-     * Resolve the IPv4 address used by the real LAN (Ethernet/Wi-Fi), not whichever interface the
-     * kernel happens to enumerate first. This is important while Miracast creates p2p0 and on TVs
-     * that also run VPN/tun/WireGuard interfaces.
-     */
-    fun getLocalIpAddress(): String? {
+    /** Returns both usable LAN families, preferring Ethernet/Wi-Fi and excluding tunnel interfaces. */
+    fun getLanAddresses(): LanAddresses {
         val context = appContext
         if (context != null) {
-            activeLanAddress(context)?.let {
-                Timber.d("Active LAN IP address: $it")
+            activeLanAddresses(context)?.takeUnless { it.isEmpty }?.let {
+                Timber.d("Active LAN addresses: IPv4=${it.ipv4}, IPv6=${it.ipv6}")
                 return it
             }
         }
-
-        return fallbackLanAddress()?.also { Timber.d("Fallback LAN IP address: $it") }
+        return fallbackLanAddresses().also {
+            Timber.d("Fallback LAN addresses: IPv4=${it.ipv4}, IPv6=${it.ipv6}")
+        }
     }
 
-    private fun activeLanAddress(context: Context): String? {
+    /** Compatibility accessor. Prefer IPv4 on dual-stack LANs, but work on IPv6-only networks. */
+    fun getLocalIpAddress(): String? = getLanAddresses().preferred
+
+    fun getLocalIpv4Address(): String? = getLanAddresses().ipv4
+
+    fun getLocalIpv6Address(): String? = getLanAddresses().ipv6
+
+    /** RFC 3986 host formatting. IPv6 literals must be bracketed; scoped addresses escape '%'. */
+    fun formatHostForUrl(address: String): String {
+        val raw = address.removePrefix("[").removeSuffix("]")
+        return if (raw.contains(':')) "[${raw.replace("%", "%25")}]" else raw
+    }
+
+    fun buildHttpUrl(address: String, port: Int, path: String = "/"): String {
+        val normalizedPath = if (path.startsWith('/')) path else "/$path"
+        return "http://${formatHostForUrl(address)}:$port$normalizedPath"
+    }
+
+    private fun activeLanAddresses(context: Context): LanAddresses? {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
             ?: return null
 
         return try {
             val networks = mutableListOf<Network>()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                cm.activeNetwork?.let { networks += it }
-            }
-            cm.allNetworks.forEach { network ->
-                if (network !in networks) networks += network
-            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) cm.activeNetwork?.let { networks += it }
+            cm.allNetworks.forEach { if (it !in networks) networks += it }
 
+            var ipv4: String? = null
+            var ipv6: String? = null
             for (network in networks) {
                 val capabilities = cm.getNetworkCapabilities(network) ?: continue
                 val isLan = capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) ||
                     capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
                 if (!isLan || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) continue
 
-                val address = cm.getLinkProperties(network)
-                    ?.linkAddresses
-                    ?.asSequence()
-                    ?.map { it.address }
-                    ?.filterIsInstance<Inet4Address>()
-                    ?.firstOrNull { isUsableIpv4(it) }
-                    ?.hostAddress
-                if (!address.isNullOrBlank()) return address
+                val addresses = cm.getLinkProperties(network)?.linkAddresses.orEmpty().map { it.address }
+                if (ipv4 == null) {
+                    ipv4 = addresses.filterIsInstance<Inet4Address>()
+                        .firstOrNull(::isUsableIpv4)?.hostAddress
+                }
+                if (ipv6 == null) {
+                    ipv6 = selectIpv6(addresses.filterIsInstance<Inet6Address>())?.hostAddress
+                }
+                if (ipv4 != null && ipv6 != null) break
             }
-            null
+            LanAddresses(ipv4, ipv6)
         } catch (e: Exception) {
-            Timber.w(e, "Unable to resolve active LAN address")
+            Timber.w(e, "Unable to resolve active LAN addresses")
             null
         }
     }
 
-    private fun fallbackLanAddress(): String? = try {
+    private fun fallbackLanAddresses(): LanAddresses = try {
         val interfaces = NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
             .filter { iface ->
                 runCatching { iface.isUp && !iface.isLoopback }.getOrDefault(false) &&
@@ -117,31 +141,37 @@ object NetworkUtils {
             }
             .sortedWith(compareBy<NetworkInterface> { interfacePriority(it.name) }.thenBy { it.name })
 
-        interfaces.firstNotNullOfOrNull { iface ->
-            iface.inetAddresses.toList()
-                .filterIsInstance<Inet4Address>()
-                .firstOrNull { isUsableIpv4(it) }
-                ?.hostAddress
+        var ipv4: String? = null
+        var ipv6: String? = null
+        for (iface in interfaces) {
+            val addresses = iface.inetAddresses.toList()
+            if (ipv4 == null) ipv4 = addresses.filterIsInstance<Inet4Address>().firstOrNull(::isUsableIpv4)?.hostAddress
+            if (ipv6 == null) ipv6 = selectIpv6(addresses.filterIsInstance<Inet6Address>())?.hostAddress
+            if (ipv4 != null && ipv6 != null) break
         }
+        LanAddresses(ipv4, ipv6)
     } catch (e: Exception) {
-        Timber.e(e, "Error getting local LAN IP address")
-        null
+        Timber.e(e, "Error getting local LAN addresses")
+        LanAddresses()
+    }
+
+    private fun selectIpv6(addresses: List<Inet6Address>): Inet6Address? {
+        val usable = addresses.filter(::isUsableIpv6)
+        // Global/ULA addresses are preferred. Link-local is retained as a last resort for IPv6-only LANs.
+        return usable.firstOrNull { !it.isLinkLocalAddress } ?: usable.firstOrNull()
     }
 
     private fun isUsableIpv4(address: Inet4Address): Boolean =
         !address.isLoopbackAddress && !address.isLinkLocalAddress && !address.isMulticastAddress
 
+    private fun isUsableIpv6(address: Inet6Address): Boolean =
+        !address.isLoopbackAddress && !address.isMulticastAddress && !address.isAnyLocalAddress
+
     private fun isExcludedInterface(name: String): Boolean {
         val n = name.lowercase()
-        return n.startsWith("p2p") ||
-            n.startsWith("tun") ||
-            n.startsWith("tap") ||
-            n.startsWith("wg") ||
-            n.startsWith("zt") ||
-            n.startsWith("vti") ||
-            n.startsWith("ipsec") ||
-            n.startsWith("dummy") ||
-            n.startsWith("clat") ||
+        return n.startsWith("p2p") || n.startsWith("tun") || n.startsWith("tap") ||
+            n.startsWith("wg") || n.startsWith("zt") || n.startsWith("vti") ||
+            n.startsWith("ipsec") || n.startsWith("dummy") || n.startsWith("clat") ||
             n.startsWith("rmnet")
     }
 
@@ -168,9 +198,7 @@ object NetworkUtils {
 
     fun generateConnectionCode(): String {
         val chars = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        return buildString(6) {
-            repeat(6) { append(chars[secureRandom.nextInt(chars.length)]) }
-        }
+        return buildString(6) { repeat(6) { append(chars[secureRandom.nextInt(chars.length)]) } }
     }
 
     /** Get a physical LAN MAC for AirPlay identity, avoiding p2p/VPN interfaces. */
@@ -178,9 +206,7 @@ object NetworkUtils {
         try {
             val preferredName = appContext?.let { activeLanInterfaceName(it) }
             val candidates = buildList {
-                if (!preferredName.isNullOrBlank()) {
-                    NetworkInterface.getByName(preferredName)?.let { add(it) }
-                }
+                if (!preferredName.isNullOrBlank()) NetworkInterface.getByName(preferredName)?.let { add(it) }
                 NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
                     .filter { !isExcludedInterface(it.name) && it !in this }
                     .sortedWith(compareBy<NetworkInterface> { interfacePriority(it.name) }.thenBy { it.name })
@@ -191,9 +217,7 @@ object NetworkUtils {
                 if (runCatching { networkInterface.isLoopback || !networkInterface.isUp }.getOrDefault(true)) continue
                 val mac = runCatching { networkInterface.hardwareAddress }.getOrNull()
                 if (mac != null && mac.isNotEmpty()) {
-                    val macAddress = mac.joinToString(":") {
-                        String.format("%02X", it.toInt() and 0xFF)
-                    }
+                    val macAddress = mac.joinToString(":") { String.format("%02X", it.toInt() and 0xFF) }
                     Timber.d("Found LAN MAC address on ${networkInterface.name}: $macAddress")
                     return macAddress
                 }
@@ -201,13 +225,11 @@ object NetworkUtils {
         } catch (e: Exception) {
             Timber.e(e, "Error getting LAN MAC address")
         }
-
         return getOrCreateFallbackMacAddress()
     }
 
     private fun activeLanInterfaceName(context: Context): String? {
-        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
-            ?: return null
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return null
         return try {
             val networks = mutableListOf<Network>()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) cm.activeNetwork?.let { networks += it }
@@ -219,20 +241,15 @@ object NetworkUtils {
                 if (!isLan || caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)) null
                 else cm.getLinkProperties(network)?.interfaceName
             }
-        } catch (_: Exception) {
-            null
-        }
+        } catch (_: Exception) { null }
     }
 
-    /** Stable locally-administered fallback for Android versions that hide physical MAC addresses. */
     private fun getOrCreateFallbackMacAddress(): String {
         val context = appContext
         if (context == null) return generateRandomMacAddress()
-
         val prefs = context.getSharedPreferences(IDENTITY_PREFS, Context.MODE_PRIVATE)
         val existing = prefs.getString(KEY_FALLBACK_MAC, null)
         if (!existing.isNullOrBlank()) return existing
-
         val generated = generateRandomMacAddress()
         prefs.edit().putString(KEY_FALLBACK_MAC, generated).apply()
         Timber.i("Generated stable locally-administered AirPlay MAC fallback")

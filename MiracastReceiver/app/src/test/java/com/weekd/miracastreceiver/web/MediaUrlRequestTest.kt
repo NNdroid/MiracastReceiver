@@ -19,6 +19,18 @@ class MediaUrlRequestTest {
     }
 
     @Test
+    fun acceptsIpv6LiteralHlsUrl() {
+        val request = MediaUrlRequest.parse("http://[2001:db8::10]:8080/live/index.m3u8")
+        assertEquals("http://[2001:db8::10]:8080/live/index.m3u8", request.url)
+    }
+
+    @Test
+    fun acceptsIpv6UlaMediaUrl() {
+        val request = MediaUrlRequest.parse("https://[fd66:f2f:2090::2]/movie.mp4")
+        assertEquals("https://[fd66:f2f:2090::2]/movie.mp4", request.url)
+    }
+
+    @Test
     fun rejectsNonHttpSchemes() {
         val result = runCatching { MediaUrlRequest.parse("file:///sdcard/movie.mp4") }
         assertTrue(result.isFailure)

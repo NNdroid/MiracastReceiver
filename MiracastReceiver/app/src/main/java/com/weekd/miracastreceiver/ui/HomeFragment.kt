@@ -22,7 +22,6 @@ import kotlinx.coroutines.withContext
 
 /** Single-screen receiver dashboard. No settings controls live here. */
 class HomeFragment : Fragment(), MainActivity.TvPage {
-    private lateinit var deviceInfoProvider: DeviceInfoProvider
     private lateinit var tvDeviceName: TextView
     private lateinit var tvDeviceIp: TextView
     private lateinit var tvConnectionCode: TextView
@@ -41,7 +40,7 @@ class HomeFragment : Fragment(), MainActivity.TvPage {
     private lateinit var connectionCode: String
 
     private data class DashboardSnapshot(
-        val ip: String?,
+        val addresses: NetworkUtils.LanAddresses,
         val networkReady: Boolean,
         val webEnabled: Boolean,
         val preferredPort: Int,
@@ -60,8 +59,7 @@ class HomeFragment : Fragment(), MainActivity.TvPage {
     override fun onViewCreated(view: View, state: Bundle?) {
         super.onViewCreated(view, state)
         val context = requireContext()
-        deviceInfoProvider = DeviceInfoProvider(context)
-        deviceName = deviceInfoProvider.getDeviceName()
+        deviceName = DeviceInfoProvider(context).getDeviceName()
         connectionCode = AppSettings.getOrCreateConnectionCode(context)
         tvDeviceName = view.findViewById(R.id.tv_device_name)
         tvDeviceIp = view.findViewById(R.id.tv_device_ip)
@@ -102,18 +100,18 @@ class HomeFragment : Fragment(), MainActivity.TvPage {
 
     private fun collectSnapshot(): DashboardSnapshot {
         val context = requireContext().applicationContext
-        val ip = NetworkUtils.getLocalIpAddress()
         val preferredPort = AppSettings.getWebUiPort(context)
+        val authRequired = AppSettings.isWebUiAuthRequired(context)
         return DashboardSnapshot(
-            ip = ip,
+            addresses = NetworkUtils.getLanAddresses(),
             networkReady = NetworkUtils.isNetworkAvailable(context),
             webEnabled = AppSettings.isWebUiEnabled(context),
             preferredPort = preferredPort,
             runtimePort = RuntimeState.webUiPort.takeIf { it in 1024..65535 }
                 ?: AppSettings.getWebUiLastBoundPort(context)
                 ?: preferredPort,
-            authRequired = AppSettings.isWebUiAuthRequired(context),
-            token = if (AppSettings.isWebUiAuthRequired(context)) AppSettings.getOrCreateWebUiToken(context) else "",
+            authRequired = authRequired,
+            token = if (authRequired) AppSettings.getOrCreateWebUiToken(context) else "",
             airPlayEnabled = AppSettings.isAirPlayEnabled(context),
             dlnaEnabled = AppSettings.isDlnaEnabled(context),
             miracastEnabled = AppSettings.isMiracastEnabled(context),
@@ -124,13 +122,18 @@ class HomeFragment : Fragment(), MainActivity.TvPage {
     private fun render(snapshot: DashboardSnapshot) {
         if (!isAdded) return
         val context = requireContext()
-        tvDeviceIp.text = getString(R.string.device_ip, snapshot.ip ?: getString(R.string.waiting_network))
+        val addressText = buildList {
+            snapshot.addresses.ipv4?.let { add("IPv4 $it") }
+            snapshot.addresses.ipv6?.let { add("IPv6 $it") }
+        }.joinToString("  •  ").ifBlank { getString(R.string.waiting_network) }
+        tvDeviceIp.text = getString(R.string.device_ip, addressText)
         tvStatus.setText(if (snapshot.networkReady) R.string.waiting_connection else R.string.waiting_network)
         val fallback = snapshot.runtimePort != snapshot.preferredPort
+        val preferredAddress = snapshot.addresses.preferred
         tvWebUiUrl.text = when {
             !snapshot.webEnabled -> getString(R.string.webui_disabled)
-            snapshot.ip == null -> getString(R.string.webui_waiting_network)
-            else -> "http://${snapshot.ip}:${snapshot.runtimePort}"
+            preferredAddress == null -> getString(R.string.webui_waiting_network)
+            else -> NetworkUtils.buildHttpUrl(preferredAddress, snapshot.runtimePort, "/")
         }
         tvWebUiPortStatus.text = when {
             !snapshot.webEnabled -> getString(R.string.webui_service_disabled)
@@ -138,11 +141,8 @@ class HomeFragment : Fragment(), MainActivity.TvPage {
             else -> getString(R.string.webui_port_preferred, snapshot.runtimePort)
         }
         tvWebUiPortStatus.setTextColor(ContextCompat.getColor(context, if (fallback) R.color.warning else R.color.text_secondary))
-        tvWebUiToken.text = if (!snapshot.authRequired) {
-            getString(R.string.webui_token_auth_off)
-        } else {
-            getString(R.string.webui_token_embedded, snapshot.token.take(8), snapshot.token.takeLast(6))
-        }
+        tvWebUiToken.text = if (!snapshot.authRequired) getString(R.string.webui_token_auth_off)
+        else getString(R.string.webui_token_embedded, snapshot.token.take(8), snapshot.token.takeLast(6))
         renderProtocol(tvAirPlay, snapshot.airPlayEnabled)
         renderProtocol(tvDlna, snapshot.dlnaEnabled)
         renderProtocol(tvMiracast, snapshot.miracastEnabled)

@@ -20,13 +20,8 @@ object PortUtils {
     ): Int {
         val candidates = linkedSetOf<Int>()
         if (preferredPort in 1024..65535 && preferredPort !in excludedPorts) candidates += preferredPort
-        if (fallbackPort != null && fallbackPort in 1024..65535 && fallbackPort !in excludedPorts) {
-            candidates += fallbackPort
-        }
-
-        for (candidate in candidates) {
-            if (isTcpPortAvailable(candidate)) return candidate
-        }
+        if (fallbackPort != null && fallbackPort in 1024..65535 && fallbackPort !in excludedPorts) candidates += fallbackPort
+        for (candidate in candidates) if (isTcpPortAvailable(candidate)) return candidate
 
         repeat(RANDOM_ATTEMPTS) {
             val candidate = randomHighPort()
@@ -44,8 +39,9 @@ object PortUtils {
     }
 
     /**
-     * Atomically bind a listening socket. We try preferred -> previous successful fallback -> random
-     * high ports, so there is no probe/bind race on receiver startup.
+     * Bind to the platform wildcard address instead of the IPv4-only 0.0.0.0 literal. On Android's
+     * dual-stack socket implementation this accepts both IPv4 and IPv6, while remaining compatible
+     * with IPv4-only devices.
      */
     fun bindAvailableServerSocket(
         preferredPort: Int,
@@ -55,15 +51,11 @@ object PortUtils {
     ): ServerSocket {
         val candidates = linkedSetOf<Int>()
         if (preferredPort in 1024..65535 && preferredPort !in excludedPorts) candidates += preferredPort
-        if (fallbackPort != null && fallbackPort in 1024..65535 && fallbackPort !in excludedPorts) {
-            candidates += fallbackPort
-        }
+        if (fallbackPort != null && fallbackPort in 1024..65535 && fallbackPort !in excludedPorts) candidates += fallbackPort
 
         for (candidate in candidates) {
             tryBind(candidate, backlog)?.let { socket ->
-                if (candidate != preferredPort) {
-                    Timber.w("WebUI preferred port $preferredPort unavailable; reused fallback port $candidate")
-                }
+                if (candidate != preferredPort) Timber.w("WebUI preferred port $preferredPort unavailable; reused fallback port $candidate")
                 return socket
             }
         }
@@ -81,7 +73,7 @@ object PortUtils {
         repeat(8) {
             val socket = ServerSocket().apply {
                 reuseAddress = true
-                bind(InetSocketAddress("0.0.0.0", 0), backlog)
+                bind(InetSocketAddress(0), backlog)
             }
             if (socket.localPort !in excludedPorts && socket.localPort >= 1024) {
                 Timber.w("WebUI fell back to kernel-assigned port ${socket.localPort}")
@@ -102,13 +94,12 @@ object PortUtils {
         return try {
             ServerSocket().apply {
                 reuseAddress = true
-                bind(InetSocketAddress("0.0.0.0", port), backlog)
+                bind(InetSocketAddress(port), backlog)
             }
         } catch (_: Exception) {
             null
         }
     }
 
-    private fun randomHighPort(): Int =
-        RANDOM_PORT_MIN + random.nextInt(RANDOM_PORT_MAX - RANDOM_PORT_MIN + 1)
+    private fun randomHighPort(): Int = RANDOM_PORT_MIN + random.nextInt(RANDOM_PORT_MAX - RANDOM_PORT_MIN + 1)
 }

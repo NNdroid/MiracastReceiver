@@ -14,6 +14,9 @@ import java.security.SecureRandom
 /** Network helpers for LAN discovery/casting. */
 object NetworkUtils {
 
+    private const val IDENTITY_PREFS = "network_identity"
+    private const val KEY_FALLBACK_MAC = "airplay_fallback_mac"
+
     @Volatile
     private var appContext: Context? = null
 
@@ -199,7 +202,7 @@ object NetworkUtils {
             Timber.e(e, "Error getting LAN MAC address")
         }
 
-        return generateRandomMacAddress()
+        return getOrCreateFallbackMacAddress()
     }
 
     private fun activeLanInterfaceName(context: Context): String? {
@@ -219,6 +222,21 @@ object NetworkUtils {
         } catch (_: Exception) {
             null
         }
+    }
+
+    /** Stable locally-administered fallback for Android versions that hide physical MAC addresses. */
+    private fun getOrCreateFallbackMacAddress(): String {
+        val context = appContext
+        if (context == null) return generateRandomMacAddress()
+
+        val prefs = context.getSharedPreferences(IDENTITY_PREFS, Context.MODE_PRIVATE)
+        val existing = prefs.getString(KEY_FALLBACK_MAC, null)
+        if (!existing.isNullOrBlank()) return existing
+
+        val generated = generateRandomMacAddress()
+        prefs.edit().putString(KEY_FALLBACK_MAC, generated).apply()
+        Timber.i("Generated stable locally-administered AirPlay MAC fallback")
+        return generated
     }
 
     private fun generateRandomMacAddress(): String {

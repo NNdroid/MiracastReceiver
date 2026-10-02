@@ -2,6 +2,7 @@ package com.weekd.miracastreceiver.util
 
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
 import rikka.shizuku.Shizuku
 import timber.log.Timber
 import java.io.File
@@ -57,13 +58,20 @@ object PrivilegedAccess {
 
     fun isRootAvailable(): Boolean = runRoot("id").success
 
-    fun isShizukuAlive(): Boolean = runCatching { Shizuku.pingBinder() }.getOrDefault(false)
+    fun isShizukuAlive(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return false
+        return runCatching { Shizuku.pingBinder() }.getOrDefault(false)
+    }
 
-    fun isShizukuAuthorized(): Boolean = runCatching {
-        Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
-    }.getOrDefault(false)
+    fun isShizukuAuthorized(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return false
+        return runCatching {
+            Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
+        }.getOrDefault(false)
+    }
 
     fun requestShizukuPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
         if (!isShizukuAlive() || isShizukuAuthorized()) return
         runCatching { Shizuku.requestPermission(SHIZUKU_PERMISSION_REQUEST) }
             .onFailure { Timber.w(it, "Unable to request Shizuku permission") }
@@ -178,6 +186,9 @@ object PrivilegedAccess {
      * Shizuku version removes it, the normal/root paths continue to work unchanged.
      */
     private fun runShizuku(command: String): CommandResult {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return CommandResult(false, error = "Shizuku requires Android 6+")
+        }
         if (!isShizukuAuthorized()) return CommandResult(false, error = "Shizuku not authorized")
         return try {
             val method = Shizuku::class.java.getDeclaredMethod(

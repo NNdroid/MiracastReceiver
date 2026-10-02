@@ -22,8 +22,8 @@ android {
         applicationId = "com.weekd.miracastreceiver"
         minSdk = 21
         targetSdk = 36
-        versionCode = 24
-        versionName = "1.9.2"
+        versionCode = 25
+        versionName = "1.9.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -120,11 +120,13 @@ dependencies {
     implementation("com.squareup.retrofit2:converter-gson:2.11.0")
     implementation("com.google.code.gson:gson:2.11.0")
 
-    implementation("androidx.media3:media3-exoplayer:1.5.0")
-    implementation("androidx.media3:media3-exoplayer-hls:1.5.0")
-    implementation("androidx.media3:media3-exoplayer-dash:1.5.0")
-    implementation("androidx.media3:media3-ui:1.5.0")
-    implementation("androidx.media3:media3-common:1.5.0")
+    // 1.9+ raises Media3 minSdk to 23. Keep the newest stable line compatible with our minSdk 21.
+    val media3Version = "1.8.1"
+    implementation("androidx.media3:media3-exoplayer:$media3Version")
+    implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
+    implementation("androidx.media3:media3-exoplayer-dash:$media3Version")
+    implementation("androidx.media3:media3-ui:$media3Version")
+    implementation("androidx.media3:media3-common:$media3Version")
 
     implementation("org.webrtc:google-webrtc:1.0.32006")
     implementation("com.jakewharton.timber:timber:5.0.1")

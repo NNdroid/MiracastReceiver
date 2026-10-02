@@ -24,16 +24,14 @@ import com.weekd.miracastreceiver.util.AppSettings
 import com.weekd.miracastreceiver.util.PrivilegedAccess
 import com.weekd.miracastreceiver.utils.NetworkUtils
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import rikka.shizuku.Shizuku
 import timber.log.Timber
 
-/**
- * Android TV main screen. The receiver itself lives in [CastReceiverService]; this Activity is a
- * remote-control friendly status/configuration surface and can be closed without stopping casting.
- */
+/** Android TV 10-foot status/configuration surface; receiver work stays in the background service. */
 class MainActivity : AppCompatActivity() {
 
     private lateinit var deviceInfoProvider: DeviceInfoProvider
@@ -41,19 +39,26 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvDeviceName: TextView
     private lateinit var tvDeviceIp: TextView
     private lateinit var tvConnectionCode: TextView
+    private lateinit var tvWebUiUrl: TextView
+    private lateinit var tvWebUiToken: TextView
     private lateinit var tvStatus: TextView
     private lateinit var tvRootStatus: TextView
     private lateinit var tvShizukuStatus: TextView
     private lateinit var tvOverlayStatus: TextView
     private lateinit var tvBootStatus: TextView
     private lateinit var switchAutoStart: SwitchCompat
+    private lateinit var switchAirPlay: SwitchCompat
+    private lateinit var switchDlna: SwitchCompat
+    private lateinit var switchMiracast: SwitchCompat
+    private lateinit var switchWebUi: SwitchCompat
     private lateinit var btnOptimizeBackground: Button
     private lateinit var btnRestartReceiver: Button
 
-    private var connectionCode: String = ""
     private var wifiPermissionPending = false
     private var overlayPromptShown = false
     private var privilegedSetupAttempted = false
+    private var suppressSettingCallbacks = false
+    private var settingsApplyJob: Job? = null
 
     private val shizukuPermissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
         if (requestCode != PrivilegedAccess.SHIZUKU_PERMISSION_REQUEST) return@OnRequestPermissionResultListener
@@ -75,10 +80,7 @@ class MainActivity : AppCompatActivity() {
             get() = if (Build.VERSION.SDK_INT >= 33) {
                 arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
             } else {
-                arrayOf(
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.ACCESS_COARSE_LOCATION
-                )
+                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
             }
     }
 
@@ -91,22 +93,106 @@ class MainActivity : AppCompatActivity() {
                 .onFailure { Timber.w(it, "Unable to register Shizuku permission listener") }
         }
 
-        initServices()
+        deviceInfoProvider = DeviceInfoProvider(this)
         initViews()
-        requestWifiDirectPermissions()
+        if (AppSettings.isMiracastEnabled(this)) requestWifiDirectPermissions()
         checkNetworkAndStart()
-
-        // On the intended Magisk-rooted TV this silently installs/refreshes the boot fallback and
-        // background allowances. Without root it simply leaves the standard Android path intact.
         performBackgroundOptimization(userInitiated = false)
+    }
+
+    private fun initViews() {
+        tvDeviceName = findViewById(R.id.tv_device_name)
+        tvDeviceIp = findViewById(R.id.tv_device_ip)
+        tvConnectionCode = findViewById(R.id.tv_connection_code)
+        tvWebUiUrl = findViewById(R.id.tv_webui_url)
+        tvWebUiToken = findViewById(R.id.tv_webui_token)
+        tvStatus = findViewById(R.id.tv_status)
+        tvRootStatus = findViewById(R.id.tv_root_status)
+        tvShizukuStatus = findViewById(R.id.tv_shizuku_status)
+        tvOverlayStatus = findViewById(R.id.tv_overlay_status)
+        tvBootStatus = findViewById(R.id.tv_boot_status)
+        switchAutoStart = findViewById(R.id.switch_auto_start)
+        switchAirPlay = findViewById(R.id.switch_airplay)
+        switchDlna = findViewById(R.id.switch_dlna)
+        switchMiracast = findViewById(R.id.switch_miracast)
+        switchWebUi = findViewById(R.id.switch_webui)
+        btnOptimizeBackground = findViewById(R.id.btn_optimize_background)
+        btnRestartReceiver = findViewById(R.id.btn_restart_receiver)
+
+        syncSwitchesFromSettings()
+
+        switchAutoStart.setOnCheckedChangeListener { _, checked ->
+            if (suppressSettingCallbacks) return@setOnCheckedChangeListener
+            AppSettings.setAutoStartOnBoot(this, checked)
+            syncMagiskBootIntegration(checked)
+        }
+        switchAirPlay.setOnCheckedChangeListener { _, checked ->
+            if (suppressSettingCallbacks) return@setOnCheckedChangeListener
+            AppSettings.setAirPlayEnabled(this, checked)
+            scheduleReceiverReload("AirPlay")
+        }
+        switchDlna.setOnCheckedChangeListener { _, checked ->
+            if (suppressSettingCallbacks) return@setOnCheckedChangeListener
+            AppSettings.setDlnaEnabled(this, checked)
+            scheduleReceiverReload("DLNA")
+        }
+        switchMiracast.setOnCheckedChangeListener { _, checked ->
+            if (suppressSettingCallbacks) return@setOnCheckedChangeListener
+            AppSettings.setMiracastEnabled(this, checked)
+            if (checked) requestWifiDirectPermissions()
+            scheduleReceiverReload("Miracast")
+        }
+        switchWebUi.setOnCheckedChangeListener { _, checked ->
+            if (suppressSettingCallbacks) return@setOnCheckedChangeListener
+            AppSettings.setWebUiEnabled(this, checked)
+            updateWebUiInfo()
+            scheduleReceiverReload("WebUI")
+        }
+
+        btnOptimizeBackground.setOnClickListener { performBackgroundOptimization(userInitiated = true) }
+        btnRestartReceiver.setOnClickListener { restartReceiverService(showToast = true) }
+
+        updateIdentityInfo()
+        switchAutoStart.post { switchAutoStart.requestFocus() }
+    }
+
+    private fun syncSwitchesFromSettings() {
+        suppressSettingCallbacks = true
+        switchAutoStart.isChecked = AppSettings.isAutoStartOnBoot(this)
+        switchAirPlay.isChecked = AppSettings.isAirPlayEnabled(this)
+        switchDlna.isChecked = AppSettings.isDlnaEnabled(this)
+        switchMiracast.isChecked = AppSettings.isMiracastEnabled(this)
+        switchWebUi.isChecked = AppSettings.isWebUiEnabled(this)
+        suppressSettingCallbacks = false
+    }
+
+    private fun updateIdentityInfo() {
+        tvDeviceName.text = deviceInfoProvider.getDeviceName()
+        tvConnectionCode.text = getString(R.string.connection_code, AppSettings.getOrCreateConnectionCode(this))
+        updateWebUiInfo()
+    }
+
+    private fun updateWebUiInfo() {
+        val ip = NetworkUtils.getLocalIpAddress()
+        val enabled = AppSettings.isWebUiEnabled(this)
+        val port = AppSettings.getWebUiPort(this)
+        tvWebUiUrl.text = when {
+            !enabled -> "WebUI 已关闭"
+            ip == null -> "WebUI 等待网络"
+            else -> "http://$ip:$port"
+        }
+        tvWebUiToken.text = if (!AppSettings.isWebUiAuthRequired(this)) {
+            "Token 验证：已关闭"
+        } else {
+            "Token: ${AppSettings.getOrCreateWebUiToken(this)}"
+        }
     }
 
     private fun requestWifiDirectPermissions() {
         val missing = WIFI_DIRECT_PERMISSIONS.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
-        if (missing.isNotEmpty()) {
-            Timber.i("Requesting Wi-Fi Direct permissions: $missing")
+        if (missing.isNotEmpty() && !wifiPermissionPending) {
             wifiPermissionPending = true
             ActivityCompat.requestPermissions(this, missing.toTypedArray(), REQUEST_CODE_PERMISSIONS)
         }
@@ -123,23 +209,24 @@ class MainActivity : AppCompatActivity() {
 
         val granted = grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }
         if (granted) {
-            Timber.i("Wi-Fi Direct permissions granted, ensuring cast service is running")
             startCastService()
         } else {
             Timber.w("Wi-Fi Direct permissions denied — Miracast unavailable")
             tvStatus.text = "未授予 Wi-Fi Direct 权限，Miracast 不可用"
         }
-
         if (privilegedSetupAttempted) promptOverlayPermissionIfNeeded()
     }
 
     override fun onResume() {
         super.onResume()
+        syncSwitchesFromSettings()
+        updateIdentityInfo()
         refreshPrivilegeStatus()
         if (!wifiPermissionPending && privilegedSetupAttempted) promptOverlayPermissionIfNeeded()
     }
 
     private fun promptOverlayPermissionIfNeeded() {
+        if (!AppSettings.isAutoLaunchPlayer(this)) return
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
         if (overlayPromptShown || Settings.canDrawOverlays(this)) return
         overlayPromptShown = true
@@ -147,8 +234,8 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle("允许后台自动显示投屏画面")
             .setMessage(
-                "当应用退回 Android TV 桌面后，投屏连接仍由后台服务接收。为了让收到投屏时自动切到播放画面，" +
-                    "请允许本应用“显示在其他应用上层”。Magisk Root / Shizuku 优化成功时通常会自动配置。"
+                "应用退出到 Android TV 桌面后接收服务仍会运行。为了在收到投屏时自动切到播放器，" +
+                    "请允许“显示在其他应用上层”。Magisk Root / Shizuku 优化成功时通常会自动配置。"
             )
             .setPositiveButton("去设置") { _, _ -> openOverlaySettings() }
             .setNegativeButton("稍后", null)
@@ -156,11 +243,10 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openOverlaySettings() {
-        val withPackage = Intent(
-            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-            Uri.parse("package:$packageName")
+        val intents = listOf(
+            Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")),
+            Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
         )
-        val intents = listOf(withPackage, Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION))
         for (intent in intents) {
             try {
                 startActivity(intent)
@@ -169,86 +255,37 @@ class MainActivity : AppCompatActivity() {
                 Timber.w("Overlay settings not available: ${intent.data}")
             }
         }
-        Toast.makeText(
-            this,
-            "此电视没有悬浮窗设置页，可使用 Root/Shizuku 的“优化后台运行”自动配置",
-            Toast.LENGTH_LONG
-        ).show()
-    }
-
-    private fun initServices() {
-        deviceInfoProvider = DeviceInfoProvider(this)
-        connectionCode = AppSettings.getOrCreateConnectionCode(this)
-    }
-
-    private fun initViews() {
-        tvDeviceName = findViewById(R.id.tv_device_name)
-        tvDeviceIp = findViewById(R.id.tv_device_ip)
-        tvConnectionCode = findViewById(R.id.tv_connection_code)
-        tvStatus = findViewById(R.id.tv_status)
-        tvRootStatus = findViewById(R.id.tv_root_status)
-        tvShizukuStatus = findViewById(R.id.tv_shizuku_status)
-        tvOverlayStatus = findViewById(R.id.tv_overlay_status)
-        tvBootStatus = findViewById(R.id.tv_boot_status)
-        switchAutoStart = findViewById(R.id.switch_auto_start)
-        btnOptimizeBackground = findViewById(R.id.btn_optimize_background)
-        btnRestartReceiver = findViewById(R.id.btn_restart_receiver)
-
-        switchAutoStart.isChecked = AppSettings.isAutoStartOnBoot(this)
-        switchAutoStart.setOnCheckedChangeListener { _, isChecked ->
-            AppSettings.setAutoStartOnBoot(this, isChecked)
-            Timber.i("Auto start on boot set to $isChecked")
-            syncMagiskBootIntegration(isChecked)
-        }
-
-        btnOptimizeBackground.setOnClickListener {
-            performBackgroundOptimization(userInitiated = true)
-        }
-
-        btnRestartReceiver.setOnClickListener {
-            restartReceiverService()
-        }
-
-        tvDeviceName.text = deviceInfoProvider.getDeviceName()
-        tvConnectionCode.text = getString(R.string.connection_code, connectionCode)
-        switchAutoStart.post { switchAutoStart.requestFocus() }
+        Toast.makeText(this, "此电视没有悬浮窗设置页，可使用 Root/Shizuku 自动配置", Toast.LENGTH_LONG).show()
     }
 
     private fun checkNetworkAndStart() {
         startCastService()
-
-        if (!NetworkUtils.isNetworkAvailable(this)) {
-            tvStatus.text = "等待网络连接"
-            tvDeviceIp.text = getString(R.string.device_ip, "等待网络")
-            updateStatus()
-            return
-        }
-
-        if (!NetworkUtils.isWifiConnected(this)) {
-            Timber.w("Wi-Fi not connected; LAN casting may be unavailable")
-        }
-
-        val ipAddress = NetworkUtils.getLocalIpAddress()
-        tvDeviceIp.text = getString(R.string.device_ip, ipAddress ?: "获取中…")
-        if (ipAddress != null) Timber.i("Local IP: $ipAddress")
-
         updateStatus()
     }
 
     private fun startCastService() {
-        val intent = Intent(this, CastReceiverService::class.java)
-        ContextCompat.startForegroundService(this, intent)
-        Timber.i("Cast receiver foreground service requested")
+        ContextCompat.startForegroundService(this, Intent(this, CastReceiverService::class.java))
     }
 
-    private fun restartReceiverService() {
+    private fun scheduleReceiverReload(source: String) {
+        settingsApplyJob?.cancel()
+        settingsApplyJob = lifecycleScope.launch {
+            delay(500)
+            restartReceiverService(showToast = false)
+            Toast.makeText(this@MainActivity, "$source 配置已应用", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun restartReceiverService(showToast: Boolean) {
         btnRestartReceiver.isEnabled = false
         stopService(Intent(this, CastReceiverService::class.java))
         lifecycleScope.launch {
-            delay(350)
+            delay(450)
             startCastService()
+            delay(150)
             btnRestartReceiver.isEnabled = true
-            Toast.makeText(this@MainActivity, "投屏接收服务已重新启动", Toast.LENGTH_SHORT).show()
+            updateIdentityInfo()
+            if (showToast) Toast.makeText(this@MainActivity, "投屏接收服务已重新启动", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -256,13 +293,13 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             while (true) {
                 val ip = NetworkUtils.getLocalIpAddress()
-                if (ip != null) tvDeviceIp.text = getString(R.string.device_ip, ip)
-
+                tvDeviceIp.text = getString(R.string.device_ip, ip ?: "等待网络")
                 tvStatus.text = if (NetworkUtils.isNetworkAvailable(this@MainActivity)) {
                     getString(R.string.waiting_connection)
                 } else {
                     "等待网络连接"
                 }
+                updateIdentityInfo()
                 delay(2000)
             }
         }
@@ -271,13 +308,10 @@ class MainActivity : AppCompatActivity() {
     private fun performBackgroundOptimization(userInitiated: Boolean) {
         lifecycleScope.launch(Dispatchers.IO) {
             val statusBefore = PrivilegedAccess.getStatus(this@MainActivity)
-
             if (!statusBefore.rootAvailable && statusBefore.shizukuAlive && !statusBefore.shizukuAuthorized) {
                 privilegedSetupAttempted = true
                 withContext(Dispatchers.Main) {
-                    if (userInitiated) {
-                        PrivilegedAccess.requestShizukuPermission()
-                    }
+                    if (userInitiated) PrivilegedAccess.requestShizukuPermission()
                     refreshPrivilegeStatus()
                     if (!userInitiated && !wifiPermissionPending) promptOverlayPermissionIfNeeded()
                 }
@@ -296,8 +330,7 @@ class MainActivity : AppCompatActivity() {
                         result.success && result.bootScriptInstalled ->
                             "${result.privilegedChannel} 优化完成，Magisk 开机兜底已安装"
                         result.success -> "${result.privilegedChannel} 后台优化完成"
-                        result.privilegedChannel == "Android" ->
-                            "未获得 Root/Shizuku 权限，将继续使用 Android 标准后台模式"
+                        result.privilegedChannel == "Android" -> "未获得 Root/Shizuku 权限，将使用 Android 标准后台模式"
                         else -> "后台优化未完全成功，请检查授权"
                     }
                     Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
@@ -310,11 +343,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun syncMagiskBootIntegration(enabled: Boolean) {
         lifecycleScope.launch(Dispatchers.IO) {
-            if (enabled) {
-                PrivilegedAccess.installMagiskBootScript(this@MainActivity)
-            } else {
-                PrivilegedAccess.removeMagiskBootScript()
-            }
+            if (enabled) PrivilegedAccess.installMagiskBootScript(this@MainActivity)
+            else PrivilegedAccess.removeMagiskBootScript()
             withContext(Dispatchers.Main) { refreshPrivilegeStatus() }
         }
     }
@@ -322,8 +352,7 @@ class MainActivity : AppCompatActivity() {
     private fun refreshPrivilegeStatus() {
         lifecycleScope.launch(Dispatchers.IO) {
             val status = PrivilegedAccess.getStatus(this@MainActivity)
-            val overlayAllowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
-                Settings.canDrawOverlays(this@MainActivity)
+            val overlayAllowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this@MainActivity)
             val autoStart = AppSettings.isAutoStartOnBoot(this@MainActivity)
 
             withContext(Dispatchers.Main) {
@@ -332,12 +361,7 @@ class MainActivity : AppCompatActivity() {
                     status.rootAvailable -> "● Root · 已授权"
                     else -> "○ Root · 不可用"
                 }
-                tvRootStatus.setTextColor(
-                    ContextCompat.getColor(
-                        this@MainActivity,
-                        if (status.rootAvailable) R.color.success else R.color.text_secondary
-                    )
-                )
+                tvRootStatus.setTextColor(ContextCompat.getColor(this@MainActivity, if (status.rootAvailable) R.color.success else R.color.text_secondary))
 
                 tvShizukuStatus.text = when {
                     Build.VERSION.SDK_INT < Build.VERSION_CODES.N -> "○ Shizuku · Android 7+ 可用"
@@ -345,50 +369,28 @@ class MainActivity : AppCompatActivity() {
                     status.shizukuAlive -> "● Shizuku · 已连接，等待授权"
                     else -> "○ Shizuku · 未连接"
                 }
-                tvShizukuStatus.setTextColor(
-                    ContextCompat.getColor(
-                        this@MainActivity,
-                        if (status.shizukuAuthorized) R.color.success else R.color.text_secondary
-                    )
-                )
+                tvShizukuStatus.setTextColor(ContextCompat.getColor(this@MainActivity, if (status.shizukuAuthorized) R.color.success else R.color.text_secondary))
 
-                tvOverlayStatus.text = if (overlayAllowed) {
-                    "● 后台弹出 · 已允许"
-                } else {
-                    "○ 后台弹出 · 需要授权"
-                }
-                tvOverlayStatus.setTextColor(
-                    ContextCompat.getColor(
-                        this@MainActivity,
-                        if (overlayAllowed) R.color.success else R.color.warning
-                    )
-                )
+                tvOverlayStatus.text = if (overlayAllowed) "● 后台弹出 · 已允许" else "○ 后台弹出 · 需要授权"
+                tvOverlayStatus.setTextColor(ContextCompat.getColor(this@MainActivity, if (overlayAllowed) R.color.success else R.color.warning))
 
                 tvBootStatus.text = when {
                     !autoStart -> "○ 开机接收 · 已关闭"
                     status.bootScriptInstalled -> "● 开机接收 · BootReceiver + Magisk service.d"
                     else -> "● 开机接收 · Android BootReceiver"
                 }
-                tvBootStatus.setTextColor(
-                    ContextCompat.getColor(
-                        this@MainActivity,
-                        if (autoStart) R.color.success else R.color.text_secondary
-                    )
-                )
+                tvBootStatus.setTextColor(ContextCompat.getColor(this@MainActivity, if (autoStart) R.color.success else R.color.text_secondary))
 
                 btnOptimizeBackground.text = if (
                     Build.VERSION.SDK_INT >= Build.VERSION_CODES.N &&
                     !status.rootAvailable && status.shizukuAlive && !status.shizukuAuthorized
-                ) {
-                    "授权 Shizuku 并优化"
-                } else {
-                    getString(R.string.optimize_background)
-                }
+                ) "授权 Shizuku 并优化" else getString(R.string.optimize_background)
             }
         }
     }
 
     override fun onDestroy() {
+        settingsApplyJob?.cancel()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             runCatching { Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener) }
         }

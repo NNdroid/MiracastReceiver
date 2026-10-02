@@ -3,42 +3,38 @@ package com.weekd.miracastreceiver.discovery
 import android.content.Context
 import android.os.Build
 import android.provider.Settings
+import com.weekd.miracastreceiver.util.AppSettings
 import com.weekd.miracastreceiver.utils.CodecUtils
 import com.weekd.miracastreceiver.utils.NetworkUtils
 
-/**
- * 设备信息提供器
- */
+/** Device identity/status provider shared by casting protocols, TV UI and WebUI. */
 class DeviceInfoProvider(private val context: Context) {
 
     /**
-     * 对外显示的设备名，AirPlay / DLNA / Miracast 共用。
-     *
-     * 优先取系统设置里的设备名称（Settings.Global `device_name`，即电视「设置 → 关于 → 设备名称」），
-     * 用户在电视上改名后各种投屏方式都跟着变；取不到时退回「厂商 型号」。
-     * 常量 Settings.Global.DEVICE_NAME 是 API 25 才加的，minSdk 21 所以直接用键名。
+     * User override wins, then Android TV system device name, then manufacturer/model fallback.
+     * This keeps AirPlay / DLNA / Miracast naming consistent.
      */
     fun getDeviceName(): String {
+        AppSettings.getDeviceNameOverride(context)?.let { return it }
+
         val systemName = try {
             Settings.Global.getString(context.contentResolver, "device_name")
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
         return systemName?.trim()?.takeIf { it.isNotEmpty() }
             ?: "${Build.MANUFACTURER} ${Build.MODEL}".trim().ifEmpty { "Android TV" }
     }
 
-    fun getDeviceId(): String {
-        return "${Build.MANUFACTURER}-${Build.MODEL}-${Build.SERIAL}"
-            .replace(" ", "-")
-            .replace("/", "-")
-    }
+    /** Stable per-install ID; does not depend on restricted/deprecated Build.SERIAL. */
+    fun getDeviceId(): String = AppSettings.getOrCreateDeviceUuid(context)
 
     fun getDeviceInfo(): Map<String, String> {
         val videoConfig = CodecUtils.getRecommendedVideoConfig()
 
         return mapOf(
             "name" to getDeviceName(),
+            "id" to getDeviceId(),
             "model" to Build.MODEL,
             "manufacturer" to Build.MANUFACTURER,
             "android_version" to Build.VERSION.RELEASE,

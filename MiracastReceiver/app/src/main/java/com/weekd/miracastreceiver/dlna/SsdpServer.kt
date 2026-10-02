@@ -5,18 +5,23 @@ import com.weekd.miracastreceiver.utils.NetworkUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import timber.log.Timber
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.MulticastSocket
+import java.net.NetworkInterface
+import java.util.concurrent.CopyOnWriteArrayList
 
-/** SSDP server with IPv4 and IPv6 multicast support. */
+/** SSDP server with explicit IPv4 and IPv6 multicast sockets. */
 class SsdpServer(
     private val context: Context,
     private val deviceUuid: String,
@@ -34,36 +39,29 @@ class SsdpServer(
         private const val SERVICE_TYPE_CM = "urn:schemas-upnp-org:service:ConnectionManager:1"
     }
 
-    private var multicastSocket: MulticastSocket? = null
-    private var serverJob: Job? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val multicastSockets = CopyOnWriteArrayList<MulticastSocket>()
+    private val receiveJobs = CopyOnWriteArrayList<Job>()
     private var notifyJob: Job? = null
-    private val scope = CoroutineScope(Dispatchers.IO)
 
     fun start() {
-        if (serverJob?.isActive == true) return
-        serverJob = scope.launch {
-            try {
-                val socket = MulticastSocket(null).apply {
-                    reuseAddress = true
-                    bind(InetSocketAddress(SSDP_PORT))
-                }
-                multicastSocket = socket
-                joinGroupBestEffort(socket, SSDP_IPV4)
-                joinGroupBestEffort(socket, SSDP_IPV6)
-                Timber.i("SSDP server started dual-stack on port $SSDP_PORT")
+        if (receiveJobs.any { it.isActive }) return
 
-                val buffer = ByteArray(2048)
-                while (isActive && !socket.isClosed) {
-                    val packet = DatagramPacket(buffer, buffer.size)
-                    socket.receive(packet)
-                    val message = String(packet.data, 0, packet.length)
-                    if (message.contains(SSDP_SEARCH_PATTERN, ignoreCase = true)) {
-                        handleSearchRequest(message, packet.address, packet.port)
-                    }
-                }
-            } catch (e: Exception) {
-                if (multicastSocket?.isClosed != true) Timber.e(e, "SSDP server error")
-            }
+        val interfaces = multicastInterfaces()
+        val ipv4Socket = createFamilySocket(InetAddress.getByName("0.0.0.0"), SSDP_IPV4, interfaces)
+        val ipv6Socket = createFamilySocket(InetAddress.getByName("::"), SSDP_IPV6, interfaces)
+
+        listOfNotNull(ipv4Socket, ipv6Socket).forEach { socket ->
+            multicastSockets += socket
+            receiveJobs += scope.launch { receiveLoop(socket) }
+        }
+
+        if (multicastSockets.isEmpty()) {
+            Timber.w("SSDP could not bind either IPv4 or IPv6 multicast socket")
+        } else {
+            Timber.i(
+                "SSDP started: listeners=${multicastSockets.joinToString { it.localAddress.hostAddress ?: "?" }}:$SSDP_PORT"
+            )
         }
         startPeriodicNotify()
     }
@@ -71,28 +69,67 @@ class SsdpServer(
     fun stop() {
         runCatching { sendByebye() }
         notifyJob?.cancel()
-        serverJob?.cancel()
-        runCatching { multicastSocket?.close() }
-        multicastSocket = null
+        notifyJob = null
+        receiveJobs.forEach { it.cancel() }
+        receiveJobs.clear()
+        multicastSockets.forEach { runCatching { it.close() } }
+        multicastSockets.clear()
         Timber.i("SSDP server stopped")
     }
 
-    private fun joinGroupBestEffort(socket: MulticastSocket, literal: String) {
-        val group = InetAddress.getByName(literal)
-        var joined = false
-        val interfaces = java.net.NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
-            .filter { runCatching { it.isUp && !it.isLoopback && it.supportsMulticast() }.getOrDefault(false) }
-        for (iface in interfaces) {
-            runCatching {
-                socket.joinGroup(InetSocketAddress(group, SSDP_PORT), iface)
-                joined = true
-                Timber.d("Joined SSDP group $literal on ${iface.name}")
+    private fun createFamilySocket(
+        wildcard: InetAddress,
+        groupLiteral: String,
+        interfaces: List<NetworkInterface>
+    ): MulticastSocket? {
+        val group = InetAddress.getByName(groupLiteral)
+        val socket = try {
+            MulticastSocket(null).apply {
+                reuseAddress = true
+                bind(InetSocketAddress(wildcard, SSDP_PORT))
             }
+        } catch (e: Exception) {
+            Timber.w(e, "Unable to bind SSDP ${wildcard.hostAddress}:$SSDP_PORT")
+            return null
         }
+
+        var joined = false
+        interfaces.forEach { iface ->
+            if (!interfaceSupportsFamily(iface, group)) return@forEach
+            runCatching {
+                val scopedGroup = scopedGroupAddress(group, iface)
+                socket.joinGroup(InetSocketAddress(scopedGroup, SSDP_PORT), iface)
+                joined = true
+                Timber.d("Joined SSDP group $groupLiteral on ${iface.name}")
+            }.onFailure { Timber.d(it, "Could not join $groupLiteral on ${iface.name}") }
+        }
+
         if (!joined) {
             runCatching { socket.joinGroup(InetSocketAddress(group, SSDP_PORT), null) }
-                .onSuccess { Timber.d("Joined SSDP group $literal on default interface") }
-                .onFailure { Timber.w(it, "Unable to join SSDP group $literal") }
+                .onSuccess { joined = true }
+                .onFailure { Timber.w(it, "Unable to join SSDP group $groupLiteral") }
+        }
+
+        if (!joined) {
+            socket.close()
+            return null
+        }
+        return socket
+    }
+
+    private suspend fun receiveLoop(socket: MulticastSocket) {
+        val buffer = ByteArray(2048)
+        try {
+            while (currentCoroutineContext().isActive && !socket.isClosed) {
+                val packet = DatagramPacket(buffer, buffer.size)
+                socket.receive(packet)
+                val message = String(packet.data, 0, packet.length)
+                if (message.contains(SSDP_SEARCH_PATTERN, ignoreCase = true)) {
+                    handleSearchRequest(message, packet.address, packet.port)
+                }
+            }
+        } catch (e: Exception) {
+            if (!socket.isClosed) Timber.e(e, "SSDP receive loop failed on ${socket.localAddress.hostAddress}")
         }
     }
 
@@ -134,12 +171,16 @@ class SsdpServer(
             }
             append("\r\n\r\n")
         }
+
         runCatching {
-            DatagramSocket().use { socket ->
+            val wildcard = if (address is Inet6Address) InetAddress.getByName("::") else InetAddress.getByName("0.0.0.0")
+            DatagramSocket(null).use { socket ->
+                socket.reuseAddress = true
+                socket.bind(InetSocketAddress(wildcard, 0))
                 val data = response.toByteArray()
                 socket.send(DatagramPacket(data, data.size, address, port))
             }
-        }.onFailure { Timber.e(it, "Error sending SSDP response") }
+        }.onFailure { Timber.e(it, "Error sending SSDP response to ${address.hostAddress}:$port") }
     }
 
     private fun startPeriodicNotify() {
@@ -158,45 +199,96 @@ class SsdpServer(
         SERVICE_TYPE_AV, SERVICE_TYPE_RC, SERVICE_TYPE_CM
     )
 
-    private fun sendNotify() {
-        sendNotifications("ssdp:alive")
-    }
+    private fun sendNotify() = sendNotifications("ssdp:alive")
 
-    private fun sendByebye() {
-        sendNotifications("ssdp:byebye")
-    }
+    private fun sendByebye() = sendNotifications("ssdp:byebye")
 
     private fun sendNotifications(nts: String) {
         val addresses = NetworkUtils.getLanAddresses()
-        val targets = buildList {
-            addresses.ipv4?.let { add(Triple(SSDP_IPV4, it, "$SSDP_IPV4:$SSDP_PORT")) }
-            addresses.ipv6?.let { add(Triple(SSDP_IPV6, it, "[$SSDP_IPV6]:$SSDP_PORT")) }
+        val interfaces = multicastInterfaces()
+
+        addresses.ipv4?.let { localAddress ->
+            interfacesForAddress(interfaces, localAddress, ipv6 = false).forEach { iface ->
+                sendNotificationOnInterface(nts, SSDP_IPV4, localAddress, "$SSDP_IPV4:$SSDP_PORT", iface)
+            }
         }
-        for ((groupLiteral, localAddress, hostHeader) in targets) {
-            runCatching {
-                DatagramSocket().use { socket ->
-                    val group = InetAddress.getByName(groupLiteral)
-                    for (nt in notificationTypes()) {
-                        val message = buildString {
-                            append("NOTIFY * HTTP/1.1\r\n")
-                            append("HOST: $hostHeader\r\n")
-                            if (nts == "ssdp:alive") {
-                                append("CACHE-CONTROL: max-age=1800\r\n")
-                                append("LOCATION: ${NetworkUtils.buildHttpUrl(localAddress, httpPort, "/device.xml")}\r\n")
-                            }
-                            append("NT: $nt\r\n")
-                            append("NTS: $nts\r\n")
-                            if (nts == "ssdp:alive") append("SERVER: Android/11 UPnP/1.0 MiracastReceiver/1.0\r\n")
-                            append("USN: uuid:$deviceUuid")
-                            if (nt != "uuid:$deviceUuid") append("::$nt")
-                            append("\r\n\r\n")
+        addresses.ipv6?.let { localAddress ->
+            interfacesForAddress(interfaces, localAddress, ipv6 = true).forEach { iface ->
+                sendNotificationOnInterface(nts, SSDP_IPV6, localAddress, "[$SSDP_IPV6]:$SSDP_PORT", iface)
+            }
+        }
+    }
+
+    /** Prefer the interface that actually owns LOCATION; only fall back by family if ownership
+     * cannot be resolved. This prevents advertising an eth0 URL out wlan0 (or vice versa). */
+    private fun interfacesForAddress(
+        interfaces: List<NetworkInterface>,
+        localAddress: String,
+        ipv6: Boolean
+    ): List<NetworkInterface> {
+        val exact = interfaces.filter { interfaceHasAddress(it, localAddress) }
+        return if (exact.isNotEmpty()) exact else interfaces.filter { interfaceHasFamily(it, ipv6) }
+    }
+
+    private fun sendNotificationOnInterface(
+        nts: String,
+        groupLiteral: String,
+        localAddress: String,
+        hostHeader: String,
+        iface: NetworkInterface
+    ) {
+        runCatching {
+            val group = scopedGroupAddress(InetAddress.getByName(groupLiteral), iface)
+            MulticastSocket().use { socket ->
+                socket.networkInterface = iface
+                for (nt in notificationTypes()) {
+                    val message = buildString {
+                        append("NOTIFY * HTTP/1.1\r\n")
+                        append("HOST: $hostHeader\r\n")
+                        if (nts == "ssdp:alive") {
+                            append("CACHE-CONTROL: max-age=1800\r\n")
+                            append("LOCATION: ${NetworkUtils.buildHttpUrl(localAddress, httpPort, "/device.xml")}\r\n")
                         }
-                        val data = message.toByteArray()
-                        socket.send(DatagramPacket(data, data.size, group, SSDP_PORT))
+                        append("NT: $nt\r\n")
+                        append("NTS: $nts\r\n")
+                        if (nts == "ssdp:alive") append("SERVER: Android/11 UPnP/1.0 MiracastReceiver/1.0\r\n")
+                        append("USN: uuid:$deviceUuid")
+                        if (nt != "uuid:$deviceUuid") append("::$nt")
+                        append("\r\n\r\n")
                     }
+                    val data = message.toByteArray()
+                    socket.send(DatagramPacket(data, data.size, group, SSDP_PORT))
                 }
-                Timber.i("Sent SSDP $nts via $groupLiteral")
-            }.onFailure { Timber.w(it, "Unable to send SSDP $nts via $groupLiteral") }
-        }
+            }
+            Timber.d("Sent SSDP $nts via ${iface.name} to $groupLiteral")
+        }.onFailure { Timber.d(it, "Unable to send SSDP $nts via ${iface.name} to $groupLiteral") }
+    }
+
+    private fun multicastInterfaces(): List<NetworkInterface> =
+        NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
+            .filter { iface ->
+                runCatching { iface.isUp && !iface.isLoopback && iface.supportsMulticast() }.getOrDefault(false)
+            }
+            .filterNot { iface ->
+                val n = iface.name.lowercase()
+                n.startsWith("tun") || n.startsWith("tap") || n.startsWith("wg") ||
+                    n.startsWith("zt") || n.startsWith("vti") || n.startsWith("ipsec") ||
+                    n.startsWith("dummy") || n.startsWith("clat") || n.startsWith("rmnet")
+            }
+
+    private fun interfaceSupportsFamily(iface: NetworkInterface, address: InetAddress): Boolean =
+        if (address is Inet6Address) interfaceHasFamily(iface, true) else interfaceHasFamily(iface, false)
+
+    private fun interfaceHasFamily(iface: NetworkInterface, ipv6: Boolean): Boolean =
+        iface.inetAddresses.toList().any { if (ipv6) it is Inet6Address else it is Inet4Address }
+
+    private fun interfaceHasAddress(iface: NetworkInterface, address: String): Boolean {
+        val normalized = address.substringBefore('%')
+        return iface.inetAddresses.toList().any { it.hostAddress?.substringBefore('%') == normalized }
+    }
+
+    private fun scopedGroupAddress(group: InetAddress, iface: NetworkInterface): InetAddress {
+        if (group !is Inet6Address) return group
+        return Inet6Address.getByAddress(null, group.address, iface.index)
     }
 }

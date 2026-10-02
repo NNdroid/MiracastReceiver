@@ -151,7 +151,7 @@
                     android:textIsSelectable="true"
                     android:textSize="18sp"
                     android:textStyle="bold"
-                    tools:text="http://192.168.1.100:8090" />
+                    tools:text="http://192.168.1.100:18090" />
 
                 <TextView
                     android:id="@+id/tv_webui_token"
@@ -163,6 +163,54 @@
                     android:textIsSelectable="true"
                     android:textSize="14sp"
                     tools:text="Token: 0123456789abcdef" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="18dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <com.weekd.miracastreceiver.ui.WebUiQrImageView
+                        android:layout_width="154dp"
+                        android:layout_height="154dp"
+                        android:background="@drawable/bg_qr_frame"
+                        android:contentDescription="扫码打开 WebUI"
+                        android:scaleType="fitCenter" />
+
+                    <LinearLayout
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginLeft="18dp"
+                        android:layout_weight="1"
+                        android:orientation="vertical">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="手机扫码直达"
+                            android:textColor="@color/text_primary"
+                            android:textSize="18sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:lineSpacingExtra="3dp"
+                            android:text="二维码已自动包含当前 WebUI 地址和 Token，无需手动输入长 Token。"
+                            android:textColor="@color/text_secondary"
+                            android:textSize="13sp" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:text="Token 使用 URL #fragment，仅由浏览器读取，不会作为 HTTP 参数发送。"
+                            android:textColor="@color/text_muted"
+                            android:textSize="11sp" />
+                    </LinearLayout>
+                </LinearLayout>
             </LinearLayout>
 
             <LinearLayout

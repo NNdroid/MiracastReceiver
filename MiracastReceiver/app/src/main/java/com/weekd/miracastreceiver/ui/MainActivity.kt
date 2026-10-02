@@ -38,7 +38,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val REQUEST_CODE_WIFI_DIRECT = 1001
         private const val FOCUS_SCALE = 1.06f
-        private const val FOCUS_ANIMATION_MS = 110L
+        private const val FOCUS_ANIMATION_MS = 90L
         private val WIFI_DIRECT_PERMISSIONS: Array<String>
             get() = if (Build.VERSION.SDK_INT >= 33) {
                 arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
@@ -57,7 +57,7 @@ class MainActivity : AppCompatActivity() {
         if (savedInstanceState == null) {
             showDestination(Destination.HOME, moveFocus = true)
         } else {
-            currentDestination = supportFragmentManager.fragments.lastOrNull()?.let {
+            currentDestination = supportFragmentManager.fragments.firstOrNull { !it.isHidden }?.let {
                 when (it) {
                     is SettingsFragment -> Destination.SETTINGS
                     is PlayerHubFragment -> Destination.PLAYER
@@ -86,7 +86,12 @@ class MainActivity : AppCompatActivity() {
             view.setOnFocusChangeListener { target, hasFocus ->
                 target.animate().cancel()
                 val scale = if (hasFocus) FOCUS_SCALE else 1f
-                target.animate().scaleX(scale).scaleY(scale).setDuration(FOCUS_ANIMATION_MS).start()
+                target.animate()
+                    .scaleX(scale)
+                    .scaleY(scale)
+                    .setDuration(FOCUS_ANIMATION_MS)
+                    .withLayer()
+                    .start()
             }
         }
     }
@@ -99,19 +104,37 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showDestination(destination: Destination, moveFocus: Boolean) {
+        if (destination == currentDestination) {
+            if (!moveFocus) {
+                (supportFragmentManager.findFragmentByTag(destination.name) as? TvPage)?.requestInitialFocus()
+            }
+            return
+        }
+
+        val manager = supportFragmentManager
+        val target = manager.findFragmentByTag(destination.name) ?: fragmentFor(destination)
+        val transaction = manager.beginTransaction().setReorderingAllowed(true)
+
+        manager.fragments.forEach { fragment ->
+            if (fragment != target && !fragment.isHidden) transaction.hide(fragment)
+        }
+
+        if (target.isAdded) {
+            transaction.show(target)
+        } else {
+            transaction.add(R.id.fragment_container, target, destination.name)
+        }
+
         currentDestination = destination
-        supportFragmentManager.beginTransaction()
-            .setReorderingAllowed(true)
-            .replace(R.id.fragment_container, fragmentFor(destination), destination.name)
-            .commit()
+        transaction.runOnCommit {
+            if (!moveFocus) (target as? TvPage)?.requestInitialFocus()
+        }
+        transaction.commit()
         updateNavigationSelection()
 
         if (moveFocus) {
             val navView = navItems.first { it.first == destination }.second
             navView.post { navView.requestFocus() }
-        } else {
-            supportFragmentManager.executePendingTransactions()
-            (supportFragmentManager.findFragmentByTag(destination.name) as? TvPage)?.requestInitialFocus()
         }
     }
 

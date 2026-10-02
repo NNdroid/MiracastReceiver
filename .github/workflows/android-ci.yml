@@ -35,6 +35,9 @@ jobs:
       - name: Make Gradle wrapper executable
         run: chmod +x gradlew
 
+      - name: Validate WebUI JavaScript
+        run: node --check app/src/main/assets/webui/app.js
+
       - name: Unit tests
         run: ./gradlew :app:testDebugUnitTest --stacktrace
 

@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="press_back_again_to_exit">再按一次返回鍵退出介面，投放接收服務會繼續執行。</string>
+</resources>

@@ -4,10 +4,13 @@ import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
+import android.view.View
 import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
@@ -60,6 +63,7 @@ class MainActivity : AppCompatActivity() {
     private var privilegedSetupAttempted = false
     private var suppressSettingCallbacks = false
     private var settingsApplyJob: Job? = null
+    private val backPressExitGate = BackPressExitGate()
 
     private val shizukuPermissionListener = Shizuku.OnRequestPermissionResultListener { requestCode, grantResult ->
         if (requestCode != PrivilegedAccess.SHIZUKU_PERMISSION_REQUEST) return@OnRequestPermissionResultListener
@@ -76,6 +80,8 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val REQUEST_CODE_PERMISSIONS = 1001
+        private const val FOCUS_SCALE = 1.035f
+        private const val FOCUS_ANIMATION_MS = 110L
         private val WIFI_DIRECT_PERMISSIONS: Array<String>
             get() = if (Build.VERSION.SDK_INT >= 33) {
                 arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
@@ -153,8 +159,47 @@ class MainActivity : AppCompatActivity() {
 
         btnOptimizeBackground.setOnClickListener { performBackgroundOptimization(userInitiated = true) }
         btnRestartReceiver.setOnClickListener { restartReceiverService(showToast = true) }
+
+        setupTvRemoteNavigation()
         updateIdentityInfo()
         switchAutoStart.post { switchAutoStart.requestFocus() }
+    }
+
+    /**
+     * Keep D-pad navigation deterministic on TV launchers. The focus chain wraps at both ends,
+     * focused controls get a small scale cue, and the active row is always scrolled into view.
+     */
+    private fun setupTvRemoteNavigation() {
+        val controls = listOf<View>(
+            switchAutoStart,
+            switchAirPlay,
+            switchDlna,
+            switchMiracast,
+            switchWebUi,
+            btnOptimizeBackground,
+            btnRestartReceiver
+        )
+        controls.forEachIndexed { index, view ->
+            val previous = controls[(index - 1 + controls.size) % controls.size]
+            val next = controls[(index + 1) % controls.size]
+            view.nextFocusUpId = previous.id
+            view.nextFocusDownId = next.id
+            view.setOnFocusChangeListener { target, hasFocus ->
+                target.animate().cancel()
+                val scale = if (hasFocus) FOCUS_SCALE else 1f
+                target.animate()
+                    .scaleX(scale)
+                    .scaleY(scale)
+                    .setDuration(FOCUS_ANIMATION_MS)
+                    .start()
+                if (hasFocus) {
+                    target.post {
+                        val rect = Rect(0, 0, target.width, target.height)
+                        target.requestRectangleOnScreen(rect, true)
+                    }
+                }
+            }
+        }
     }
 
     private fun syncSwitchesFromSettings() {
@@ -231,6 +276,20 @@ class MainActivity : AppCompatActivity() {
         updateIdentityInfo()
         refreshPrivilegeStatus()
         if (!wifiPermissionPending && privilegedSetupAttempted) promptOverlayPermissionIfNeeded()
+    }
+
+    override fun onPause() {
+        backPressExitGate.reset()
+        super.onPause()
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        if (backPressExitGate.registerPress(SystemClock.elapsedRealtime())) {
+            finish()
+        } else {
+            toast(R.string.press_back_again_to_exit)
+        }
     }
 
     private fun promptOverlayPermissionIfNeeded() {

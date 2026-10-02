@@ -61,8 +61,9 @@ class WebUiServer(
         RuntimeState.webUiPort = actualPort
         AppSettings.setWebUiLastBoundPort(appContext, actualPort)
 
-        if (actualPort == port) Timber.i("WebUI started on preferred port 0.0.0.0:$actualPort")
-        else Timber.w("WebUI preferred port $port occupied; using runtime fallback 0.0.0.0:$actualPort")
+        val bindAddress = socket.inetAddress?.hostAddress ?: "*"
+        if (actualPort == port) Timber.i("WebUI started on preferred port $actualPort bind=$bindAddress")
+        else Timber.w("WebUI preferred port $port occupied; using runtime fallback $actualPort bind=$bindAddress")
 
         acceptJob = scope.launch {
             try {
@@ -319,14 +320,29 @@ class WebUiServer(
         val deviceInfo = DeviceInfoProvider(appContext)
         val privileged = PrivilegedAccess.getStatus(appContext)
         val playback = RuntimeState.playbackSnapshot()
+        val lan = NetworkUtils.getLanAddresses()
         val now = System.currentTimeMillis()
         val preferredPort = AppSettings.getWebUiPort(appContext)
         val runtimePort = RuntimeState.webUiPort.takeIf { it > 0 } ?: AppSettings.getWebUiLastBoundPort(appContext) ?: preferredPort
         return JSONObject()
             .put("app", JSONObject().put("version", BuildConfig.VERSION_NAME).put("versionCode", BuildConfig.VERSION_CODE).put("debug", BuildConfig.DEBUG))
-            .put("device", JSONObject().put("name", deviceInfo.getDeviceName()).put("id", deviceInfo.getDeviceId()).put("manufacturer", Build.MANUFACTURER).put("model", Build.MODEL).put("android", Build.VERSION.RELEASE).put("sdk", Build.VERSION.SDK_INT).put("ip", NetworkUtils.getLocalIpAddress().orEmpty()))
-            .put("webui", JSONObject().put("port", runtimePort).put("preferredPort", preferredPort).put("fallback", runtimePort != preferredPort)
-                .put("authRequired", AppSettings.isWebUiAuthRequired(appContext)).put("authMode", AppSettings.getWebUiAuthMode(appContext)))
+            .put("device", JSONObject()
+                .put("name", deviceInfo.getDeviceName())
+                .put("id", deviceInfo.getDeviceId())
+                .put("manufacturer", Build.MANUFACTURER)
+                .put("model", Build.MODEL)
+                .put("android", Build.VERSION.RELEASE)
+                .put("sdk", Build.VERSION.SDK_INT)
+                .put("ip", lan.preferred.orEmpty())
+                .put("ipv4", lan.ipv4.orEmpty())
+                .put("ipv6", lan.ipv6.orEmpty()))
+            .put("webui", JSONObject()
+                .put("port", runtimePort)
+                .put("preferredPort", preferredPort)
+                .put("fallback", runtimePort != preferredPort)
+                .put("bindAddress", serverSocket?.inetAddress?.hostAddress.orEmpty())
+                .put("authRequired", AppSettings.isWebUiAuthRequired(appContext))
+                .put("authMode", AppSettings.getWebUiAuthMode(appContext)))
             .put("service", JSONObject().put("running", RuntimeState.serviceRunning).put("startedAtMs", RuntimeState.serviceStartedAtMs).put("uptimeMs", if (RuntimeState.serviceStartedAtMs > 0) now - RuntimeState.serviceStartedAtMs else 0).put("lastError", RuntimeState.lastError))
             .put("airplay", JSONObject().put("state", RuntimeState.airPlayState).put("sender", RuntimeState.airPlaySender))
             .put("miracast", JSONObject().put("state", RuntimeState.miracastState).put("client", RuntimeState.miracastClient).put("rtpPort", RuntimeState.miracastRtpPort))
@@ -348,12 +364,24 @@ class WebUiServer(
 
     private fun buildDiagnostics(): JSONObject {
         val recommended = CodecUtils.getRecommendedVideoConfig()
+        val lan = NetworkUtils.getLanAddresses()
         val preferredPort = AppSettings.getWebUiPort(appContext)
         val runtimePort = RuntimeState.webUiPort.takeIf { it > 0 } ?: AppSettings.getWebUiLastBoundPort(appContext) ?: preferredPort
         return JSONObject()
-            .put("network", JSONObject().put("ip", NetworkUtils.getLocalIpAddress().orEmpty()).put("available", NetworkUtils.isNetworkAvailable(appContext)).put("wifi", NetworkUtils.isWifiConnected(appContext)))
+            .put("network", JSONObject()
+                .put("ip", lan.preferred.orEmpty())
+                .put("ipv4", lan.ipv4.orEmpty())
+                .put("ipv6", lan.ipv6.orEmpty())
+                .put("available", NetworkUtils.isNetworkAvailable(appContext))
+                .put("wifi", NetworkUtils.isWifiConnected(appContext)))
             .put("codecs", JSONObject().put("h264", CodecUtils.isVideoDecoderSupported(CodecUtils.MIME_VIDEO_H264)).put("h265", CodecUtils.isVideoDecoderSupported(CodecUtils.MIME_VIDEO_H265)).put("recommendedMime", recommended.mimeType).put("recommendedWidth", recommended.width).put("recommendedHeight", recommended.height).put("recommendedFps", recommended.frameRate).put("activeDecoder", RuntimeState.decoderName()).put("activeDecoderHardware", RuntimeState.decoderHardwareAccelerated()))
-            .put("ports", JSONObject().put("webUi", runtimePort).put("webUiPreferred", preferredPort).put("webUiFallback", runtimePort != preferredPort).put("upnp", AppSettings.getUpnpPort(appContext)).put("miracastRtsp", MIRACAST_RTSP_PORT))
+            .put("ports", JSONObject()
+                .put("webUi", runtimePort)
+                .put("webUiPreferred", preferredPort)
+                .put("webUiFallback", runtimePort != preferredPort)
+                .put("webUiBindAddress", serverSocket?.inetAddress?.hostAddress.orEmpty())
+                .put("upnp", AppSettings.getUpnpPort(appContext))
+                .put("miracastRtsp", MIRACAST_RTSP_PORT))
             .put("limits", JSONObject().put("maxRequestBodyBytes", MAX_BODY_BYTES).put("maxConcurrentClients", MAX_CONCURRENT_CLIENTS).put("maxMediaUrlLength", MediaUrlRequest.MAX_URL_LENGTH).put("maxMediaHeaders", MediaUrlRequest.MAX_HEADERS).put("logEntries", WebLogBuffer.snapshot(600).size))
     }
 

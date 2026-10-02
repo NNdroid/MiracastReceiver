@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="nav_home">首頁</string>
+    <string name="nav_player">播放器</string>
+    <string name="nav_settings">設定</string>
+    <string name="nav_about">關於</string>
+    <string name="nav_remote_hint">使用方向鍵切換頁面</string>
+    <string name="home_subtitle">一頁查看接收狀態與快速入口</string>
+    <string name="home_protocol_status">接收協定</string>
+    <string name="home_now_playing">目前播放</string>
+    <string name="home_player_hint">開啟播放器查看播放詳情，或使用 WebUI 進行遠端控制。</string>
+    <string name="home_enabled">已啟用</string>
+    <string name="home_disabled">已關閉</string>
+    <string name="home_playback_state">狀態：%1$s</string>
+    <string name="settings_subtitle">接收器、開機啟動、協定與進階權限設定</string>
+    <string name="player_hub_subtitle">查看目前播放狀態與遠端播放入口</string>
+    <string name="player_hub_state">狀態：%1$s</string>
+    <string name="player_hub_nothing_playing">目前沒有播放內容</string>
+    <string name="player_hub_source">來源：%1$s</string>
+    <string name="player_hub_webui_hint">可從 WebUI 推送 HTTP、HLS 或 DASH 位址。</string>
+    <string name="player_hub_remote_title">遠端播放</string>
+    <string name="player_hub_remote_body">可在 WebUI 的播放器頁面推送 URL、控制播放、跳轉進度、調整音量並查看播放狀態。</string>
+    <string name="about_subtitle">應用程式資訊</string>
+    <string name="about_version">版本 %1$s (%2$d)</string>
+    <string name="about_description">MiracastReceiver 是面向 Android TV 的投放接收器，支援 AirPlay、DLNA/UPnP、Miracast/WFD、HTTP 直鏈播放和區域網路 WebUI。</string>
+</resources>

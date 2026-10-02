@@ -4,16 +4,16 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
-import android.content.BroadcastReceiver
-import android.content.Context
-import android.hardware.display.DisplayManager
 import android.view.Display
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -32,13 +32,15 @@ import timber.log.Timber
 import java.util.UUID
 
 /**
- * 投屏接收后台服务
- * 保持应用在后台持续监听投屏连接
+ * 投屏接收后台服务。
+ *
+ * 这是 Android TV 上的常驻接收核心：UI Activity 可以退出或从最近任务移除，服务仍保持
+ * AirPlay / DLNA / Miracast 监听。服务自身被系统回收时依靠 START_STICKY 恢复。
  */
 class CastReceiverService : Service() {
 
     companion object {
-        /** 由 BootReceiver 设置：标记这次启动来自开机广播。 */
+        /** 由 BootReceiver / Magisk service.d 设置，便于日志区分启动来源。 */
         const val EXTRA_FROM_BOOT = "from_boot"
 
         private const val NOTIFICATION_ID = 1001
@@ -47,7 +49,6 @@ class CastReceiverService : Service() {
         private const val ACTION_UPDATE_POSITION = "com.weekd.miracastreceiver.ACTION_UPDATE_POSITION"
         private const val ACTION_PLAYBACK_STOPPED = "com.weekd.miracastreceiver.ACTION_PLAYBACK_STOPPED"
 
-        /** 开机后等网络就绪的轮询间隔与最长等待时间。 */
         private const val NETWORK_RETRY_INTERVAL_MS = 5_000L
         private const val NETWORK_MAX_WAIT_MS = 5 * 60_000L
     }
@@ -61,8 +62,8 @@ class CastReceiverService : Service() {
     private lateinit var deviceUuid: String
     private var airPlayPlayerStarted = false
 
-    /** initReceivers() 是否已经跑过：没跑过时那些 lateinit 字段不能碰。 */
     private var initialized = false
+    private var servicesStarted = false
     private val mainHandler = Handler(Looper.getMainLooper())
     private var networkWaitRunnable: Runnable? = null
     private var networkWaitElapsedMs = 0L
@@ -79,8 +80,6 @@ class CastReceiverService : Service() {
                     Timber.d("Player position updated: $position / $duration")
                 }
                 ACTION_PLAYBACK_STOPPED -> {
-                    // TV 端本地退出/播放结束，需要让 DLNA 状态归零，
-                    // 否则 Emby 会一直显示"正在播放"且无法取消/切换投屏。
                     dlnaRenderer.updatePosition(0L, 0L)
                     dlnaRenderer.setStopped()
                     Timber.i("Playback stopped locally, DLNA renderer reset to STOPPED")
@@ -93,26 +92,18 @@ class CastReceiverService : Service() {
         super.onCreate()
         Timber.i("CastReceiverService created")
         createNotificationChannel()
-        // startForeground 放在 onStartCommand 里：前台服务类型要看这次是不是开机拉起的
-        // （Android 15 起 BOOT_COMPLETED 不允许启动 mediaPlayback 类型）。
     }
 
-    /**
-     * 真正的初始化。开机启动时网络还没就绪，DLNA/SSDP 需要本机 IP 才能正确绑定，
-     * 所以推迟到 [startWhenNetworkReady] 拿到 IP 之后再做，且只做一次。
-     */
     private fun initReceivers() {
         if (initialized) return
         initialized = true
 
-        // 初始化设备 UUID
         deviceUuid = generateDeviceUuid()
 
         val mirrorResolution = getBestDisplayResolution()
         val deviceName = DeviceInfoProvider(this).getDeviceName()
         Timber.i("AirPlay mirror advertised resolution: ${mirrorResolution.first}x${mirrorResolution.second}")
 
-        // 初始化 AirPlay 2 接收器（基于 PhairPlay 实现，支持 iOS 屏幕镜像）
         airPlayReceiver = AirPlayReceiver(
             context = this,
             displayName = deviceName,
@@ -130,12 +121,10 @@ class CastReceiverService : Service() {
                         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
                     }
                     startActivity(intent)
-                } else if (state != com.weekd.miracastreceiver.airplay.AirPlayState.CONNECTED &&
+                } else if (
+                    state != com.weekd.miracastreceiver.airplay.AirPlayState.CONNECTED &&
                     airPlayPlayerStarted
                 ) {
-                    // iPhone 结束镜像（TEARDOWN 或连接断开）后必须主动关掉播放页，
-                    // 否则画面会一直停在最后一帧。只在确实由 AirPlay 拉起过播放页时才发，
-                    // 免得误关正在播放的 DLNA 内容。
                     airPlayPlayerStarted = false
                     Timber.i("AirPlay disconnected ($state), closing player")
                     sendBroadcast(Intent(com.weekd.miracastreceiver.ui.PlayerActivity.ACTION_STOP).apply {
@@ -146,26 +135,22 @@ class CastReceiverService : Service() {
             onSenderNameChanged = { sender -> Timber.i("AirPlay sender: $sender") }
         )
 
-        // 初始化 Windows 无线显示器（Miracast/WFD）服务器
         initWfdServer()
-
-        // 初始化 DLNA/UPnP 服务
         initDlnaServices()
+
         val playerStateFilter = IntentFilter().apply {
             addAction(ACTION_UPDATE_POSITION)
             addAction(ACTION_PLAYBACK_STOPPED)
         }
-        // ContextCompat 而非直接调用：带 flags 的重载是 API 26 才有的，
-        // 老电视（Android 5/6/7）上直接调会 NoSuchMethodError 闪退。
         ContextCompat.registerReceiver(
-            this, playerStateReceiver, playerStateFilter, ContextCompat.RECEIVER_NOT_EXPORTED
+            this,
+            playerStateReceiver,
+            playerStateFilter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
         )
     }
 
     private fun getBestDisplayResolution(): Pair<Int, Int> {
-        // Display.getSupportedModes / getMode 是 API 23 起才有的，而 minSdk 是 21。
-        // 这个方法在服务 onCreate 里调用，低版本上直接调会 NoSuchMethodError 闪退，
-        // 所以 Android 5.x 直接用 displayMetrics（精度略低但够用）。
         var width = resources.displayMetrics.widthPixels
         var height = resources.displayMetrics.heightPixels
 
@@ -180,6 +165,7 @@ class CastReceiverService : Service() {
                 height = mode.physicalHeight
             }
         }
+
         val longSide = maxOf(width, height).coerceIn(1280, 3840)
         val shortSide = minOf(width, height).coerceIn(720, 2160)
         return longSide to shortSide
@@ -198,15 +184,12 @@ class CastReceiverService : Service() {
             }
             onStreamStopped = {
                 Timber.i("Miracast stream stopped, closing player")
-                // Windows 断开（RTSP 连接关闭或 TEARDOWN）后必须主动关掉播放页，
-                // 否则手机会一直停在最后一帧画面上
                 sendBroadcast(Intent(com.weekd.miracastreceiver.ui.PlayerActivity.ACTION_STOP).apply {
                     setPackage(packageName)
                 })
             }
         }
 
-        // 初始化 Wi-Fi Direct 以支持 Windows 无线显示器发现
         wifiDirectManager = WifiDirectManager(this, DeviceInfoProvider(this).getDeviceName()).apply {
             onGroupCreated = { group ->
                 Timber.i("Wi-Fi Direct group created for Miracast: ${group.networkName}")
@@ -221,14 +204,11 @@ class CastReceiverService : Service() {
         val deviceInfoProvider = DeviceInfoProvider(this)
         val localIp = NetworkUtils.getLocalIpAddress() ?: "127.0.0.1"
 
-        // 创建 DLNA MediaRenderer
         dlnaRenderer = DlnaMediaRenderer()
 
-        // 设置回调
         dlnaRenderer.onSetUri = { uri, metadata ->
             Timber.i("DLNA SetURI: $uri")
             val state = dlnaRenderer.getState()
-            // 启动 PlayerActivity 并播放
             val intent = Intent(this, com.weekd.miracastreceiver.ui.PlayerActivity::class.java).apply {
                 if (state.playlist.size > 1) {
                     putStringArrayListExtra(
@@ -247,72 +227,57 @@ class CastReceiverService : Service() {
 
         dlnaRenderer.onPlay = {
             Timber.i("DLNA Play")
-            // 发送播放广播到 PlayerActivity
-            val intent = Intent(com.weekd.miracastreceiver.ui.PlayerActivity.ACTION_PLAY).apply {
+            sendBroadcast(Intent(com.weekd.miracastreceiver.ui.PlayerActivity.ACTION_PLAY).apply {
                 setPackage(packageName)
-            }
-            sendBroadcast(intent)
+            })
         }
 
         dlnaRenderer.onPause = {
             Timber.i("DLNA Pause")
-            // 发送暂停广播到 PlayerActivity
-            val intent = Intent(com.weekd.miracastreceiver.ui.PlayerActivity.ACTION_PAUSE).apply {
+            sendBroadcast(Intent(com.weekd.miracastreceiver.ui.PlayerActivity.ACTION_PAUSE).apply {
                 setPackage(packageName)
-            }
-            sendBroadcast(intent)
+            })
         }
 
         dlnaRenderer.onStop = {
             Timber.i("DLNA Stop")
-            // 发送停止广播到 PlayerActivity
-            val intent = Intent(com.weekd.miracastreceiver.ui.PlayerActivity.ACTION_STOP).apply {
+            sendBroadcast(Intent(com.weekd.miracastreceiver.ui.PlayerActivity.ACTION_STOP).apply {
                 setPackage(packageName)
-            }
-            sendBroadcast(intent)
+            })
         }
 
         dlnaRenderer.onSeek = { position ->
             Timber.i("DLNA Seek: $position")
-            // 发送跳转广播到 PlayerActivity
-            val intent = Intent(com.weekd.miracastreceiver.ui.PlayerActivity.ACTION_SEEK).apply {
+            sendBroadcast(Intent(com.weekd.miracastreceiver.ui.PlayerActivity.ACTION_SEEK).apply {
                 putExtra(com.weekd.miracastreceiver.ui.PlayerActivity.EXTRA_SEEK_POSITION, position)
                 setPackage(packageName)
-            }
-            sendBroadcast(intent)
+            })
         }
 
         dlnaRenderer.onVolumeChanged = { volume ->
             Timber.i("DLNA Volume: $volume")
-            // 发送音量广播到 PlayerActivity
-            val intent = Intent(com.weekd.miracastreceiver.ui.PlayerActivity.ACTION_SET_VOLUME).apply {
+            sendBroadcast(Intent(com.weekd.miracastreceiver.ui.PlayerActivity.ACTION_SET_VOLUME).apply {
                 putExtra(com.weekd.miracastreceiver.ui.PlayerActivity.EXTRA_VOLUME, volume)
                 setPackage(packageName)
-            }
-            sendBroadcast(intent)
+            })
         }
 
         dlnaRenderer.onSpeedChanged = { speed ->
             Timber.i("DLNA Speed: $speed")
-            // 发送播放速度广播到 PlayerActivity
-            val intent = Intent(com.weekd.miracastreceiver.ui.PlayerActivity.ACTION_SET_SPEED).apply {
+            sendBroadcast(Intent(com.weekd.miracastreceiver.ui.PlayerActivity.ACTION_SET_SPEED).apply {
                 putExtra(com.weekd.miracastreceiver.ui.PlayerActivity.EXTRA_SPEED, speed)
                 setPackage(packageName)
-            }
-            sendBroadcast(intent)
+            })
         }
 
         dlnaRenderer.onQualityUriChanged = { uri ->
             Timber.i("DLNA Quality URI: $uri")
-            // 发送画质 URI 变化广播到 PlayerActivity
-            val intent = Intent(com.weekd.miracastreceiver.ui.PlayerActivity.ACTION_SET_QUALITY_URL).apply {
+            sendBroadcast(Intent(com.weekd.miracastreceiver.ui.PlayerActivity.ACTION_SET_QUALITY_URL).apply {
                 putExtra(com.weekd.miracastreceiver.ui.PlayerActivity.EXTRA_QUALITY_URI, uri)
                 setPackage(packageName)
-            }
-            sendBroadcast(intent)
+            })
         }
 
-        // 创建 UPnP HTTP 服务器
         upnpHttpServer = UpnpHttpServer(
             context = this,
             renderer = dlnaRenderer,
@@ -324,7 +289,6 @@ class CastReceiverService : Service() {
             port = 8080
         )
 
-        // 创建 SSDP 服务器
         ssdpServer = SsdpServer(
             context = this,
             deviceUuid = deviceUuid,
@@ -334,7 +298,6 @@ class CastReceiverService : Service() {
     }
 
     private fun extractTitle(metadata: String): String {
-        // 简单解析 DIDL-Lite metadata 中的 title
         val titlePattern = Regex("<dc:title>(.*?)</dc:title>", RegexOption.IGNORE_CASE)
         val match = titlePattern.find(metadata)
         return match?.groupValues?.getOrNull(1) ?: "DLNA 投屏"
@@ -344,35 +307,22 @@ class CastReceiverService : Service() {
         val fromBoot = intent?.getBooleanExtra(EXTRA_FROM_BOOT, false) ?: false
         Timber.i("CastReceiverService started (fromBoot=$fromBoot)")
 
-        startForegroundCompat(fromBoot)
+        startForegroundCompat()
         startWhenNetworkReady()
 
         return START_STICKY
     }
 
     /**
-     * 前台服务类型：
-     * - 正常从界面启动用 mediaPlayback（投屏播放）；
-     * - 开机自启必须避开 mediaPlayback —— Android 15 起从 BOOT_COMPLETED 启动该类型
-     *   会抛 ForegroundServiceStartNotAllowedException，改用 connectedDevice
-     *   （本来也符合"接收局域网设备投屏"的语义，CHANGE_WIFI_STATE 已满足前提条件）。
+     * The always-listening receiver is a connected-device foreground service in every launch path.
+     * This avoids Android 15+ BOOT_COMPLETED mediaPlayback restrictions and also makes START_STICKY
+     * restarts safe when Android recreates the service with a null Intent.
      */
-    private fun startForegroundCompat(fromBoot: Boolean) {
-        val type = if (fromBoot) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-        } else {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-        }
-        // ServiceCompat：type 参数在 API 29 以下会被忽略，老电视上不会崩。
+    private fun startForegroundCompat() {
+        val type = ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
         ServiceCompat.startForeground(this, NOTIFICATION_ID, createNotification(), type)
     }
 
-    /**
-     * 等到拿得到局域网 IP 再启动各路接收器。
-     *
-     * 开机自启时 Wi-Fi 往往还在连，这时候启动 SSDP/mDNS 会绑到错误的地址，
-     * 结果就是服务活着但手机搜不到设备。这里每 5 秒看一次，最多等 5 分钟。
-     */
     private fun startWhenNetworkReady() {
         networkWaitRunnable?.let { mainHandler.removeCallbacks(it) }
         networkWaitRunnable = null
@@ -402,66 +352,68 @@ class CastReceiverService : Service() {
     }
 
     private fun startAllServices() {
-        // 启动 AirPlay 2 接收器
-        airPlayReceiver.start()
-
-        // 启动 DLNA/UPnP 服务
-        upnpHttpServer.start()
-        ssdpServer.start()
-
-        // 启动 Windows 无线显示器（Miracast/WFD）
-        // 先建 P2P 组，再注入 WFD IE —— 顺序反了的话建组会覆盖掉刚设的 IE。
-        wifiDirectManager.start()
-        if (WfdRootHelper.advertiseSink(this)) {
-            Timber.i("Miracast: 已作为 Wi-Fi Display Sink 对外广播，Windows 可发现")
-        } else {
-            Timber.w("Miracast: 未能注入 WFD IE（需要 root），Windows 无法发现本机")
+        if (servicesStarted) {
+            Timber.d("Cast services already started; ignoring duplicate start request")
+            return
         }
-        wfdServer.start()
+        servicesStarted = true
 
-        Timber.i("All cast services started (AirPlay + DLNA + Miracast/WFD)")
+        try {
+            airPlayReceiver.start()
+            upnpHttpServer.start()
+            ssdpServer.start()
+
+            // Build the P2P group before injecting WFD IE; creating the group can overwrite it.
+            wifiDirectManager.start()
+            if (WfdRootHelper.advertiseSink(this)) {
+                Timber.i("Miracast: 已作为 Wi-Fi Display Sink 对外广播，Windows 可发现")
+            } else {
+                Timber.w("Miracast: 未能注入 WFD IE（需要 root），Windows 无法发现本机")
+            }
+            wfdServer.start()
+
+            Timber.i("All cast services started (AirPlay + DLNA + Miracast/WFD)")
+        } catch (e: Exception) {
+            servicesStarted = false
+            Timber.e(e, "Failed to start one or more cast services")
+            throw e
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    /** 用户从最近任务移除应用时，保持后台投屏接收服务继续运行。 */
+    /** Removing the TV UI task must not disable the receiver. */
     override fun onTaskRemoved(rootIntent: Intent?) {
         Timber.i("Task removed; cast receiver remains active in background")
         super.onTaskRemoved(rootIntent)
     }
 
     override fun onDestroy() {
-        super.onDestroy()
         Timber.i("CastReceiverService destroyed")
 
         networkWaitRunnable?.let { mainHandler.removeCallbacks(it) }
         networkWaitRunnable = null
+        servicesStarted = false
 
-        // 还没等到网络就被停掉时，下面那些 lateinit 字段根本没初始化，碰了会崩。
-        if (!initialized) return
+        if (initialized) {
+            try {
+                unregisterReceiver(playerStateReceiver)
+            } catch (e: Exception) {
+                Timber.e(e, "Error unregistering playerStateReceiver")
+            }
 
-        try {
-            unregisterReceiver(playerStateReceiver)
-        } catch (e: Exception) {
-            Timber.e(e, "Error unregistering playerStateReceiver")
+            runCatching { airPlayReceiver.stop() }
+                .onFailure { Timber.w(it, "Error stopping AirPlay receiver") }
+            runCatching { ssdpServer.stop() }
+                .onFailure { Timber.w(it, "Error stopping SSDP server") }
+            runCatching { upnpHttpServer.stop() }
+                .onFailure { Timber.w(it, "Error stopping UPnP server") }
+            shutdownMiracast()
         }
 
-        // 停止 AirPlay 2 接收器
-        airPlayReceiver.stop()
-
-        // 停止 DLNA/UPnP 服务
-        ssdpServer.stop()
-        upnpHttpServer.stop()
-
-        shutdownMiracast()
+        super.onDestroy()
     }
 
-    /**
-     * 断开 Miracast 并停止对外广播。
-     *
-     * 注意 WFD IE 和 P2P 组都存在 wpa_supplicant（系统进程）里，**不随应用退出而消失**。
-     * 不主动撤销的话，应用关掉之后 Windows 依然能搜到这台设备并尝试连接。
-     */
     private fun shutdownMiracast() {
         runCatching { wfdServer.stop() }
         runCatching { WfdRootHelper.stopAdvertising(this) }
@@ -469,7 +421,6 @@ class CastReceiverService : Service() {
     }
 
     private fun generateDeviceUuid(): String {
-        // 使用设备信息生成一致的 UUID
         val deviceId = "${Build.MANUFACTURER}-${Build.MODEL}-${Build.SERIAL}"
         return UUID.nameUUIDFromBytes(deviceId.toByteArray()).toString()
     }
@@ -481,19 +432,18 @@ class CastReceiverService : Service() {
                 CHANNEL_NAME,
                 NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "保持投屏接收服务运行"
+                description = "保持 Android TV 投屏接收服务运行"
                 setShowBadge(false)
             }
 
-            val notificationManager = getSystemService(NotificationManager::class.java)
-            notificationManager.createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 
     private fun createNotification(): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.app_name))
-            .setContentText("正在等待 AirPlay/DLNA/Miracast 投屏连接")
+            .setContentText("后台等待 AirPlay / DLNA / Miracast 连接")
             .setSmallIcon(R.mipmap.ic_launcher)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)

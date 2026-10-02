@@ -110,6 +110,9 @@ class PlayerActivity : AppCompatActivity() {
     private var mediaTitle: String? = null
     private var playlist: List<String> = emptyList()
     private var playlistTitles: List<String> = emptyList()
+    private var cachedVideoMediaItems: List<MediaItem> = emptyList()
+    private var cachedVideoIndexByPlaylistIndex: IntArray = IntArray(0)
+    private var cachedPlaylistSignature: List<String> = emptyList()
     private var currentIndex: Int = 0
     private var slideJob: Job? = null
     private var progressUpdateJob: Job? = null
@@ -119,6 +122,9 @@ class PlayerActivity : AppCompatActivity() {
     private var mirrorAspectJob: Job? = null
     private var currentSpeed = 1f
     private var mediaLoadStartedAtMs = 0L
+    private var mediaReadyAtMs = 0L
+    private var lastDecoderName = ""
+    private var lastDecoderInitDurationMs = -1L
 
     // 视频流信息面板
     private val streamInfoTracker = StreamInfoTracker()
@@ -260,8 +266,8 @@ class PlayerActivity : AppCompatActivity() {
                             Player.STATE_READY -> {
                                 Timber.d("Player state: READY")
                                 if (mediaLoadStartedAtMs > 0L) {
-                                    Timber.i("DLNA/media playback ready in ${SystemClock.elapsedRealtime() - mediaLoadStartedAtMs}ms")
-                                    mediaLoadStartedAtMs = 0L
+                                    mediaReadyAtMs = SystemClock.elapsedRealtime()
+                                    Timber.i("DLNA/media playback READY in ${mediaReadyAtMs - mediaLoadStartedAtMs}ms uri=$mediaUri")
                                 }
                                 tvError.visibility = View.GONE
                                 tvStatus.text = getString(R.string.playing)
@@ -270,11 +276,28 @@ class PlayerActivity : AppCompatActivity() {
                             }
                             Player.STATE_ENDED -> {
                                 Timber.d("Player state: ENDED")
+                                mediaLoadStartedAtMs = 0L
+                                mediaReadyAtMs = 0L
                                 tvStatus.text = "播放完成"
                                 reportPlaybackPosition()
                                 playNextOrFinish()
                             }
                         }
+                    }
+
+                    override fun onRenderedFirstFrame() {
+                        val now = SystemClock.elapsedRealtime()
+                        if (mediaLoadStartedAtMs > 0L) {
+                            val totalMs = now - mediaLoadStartedAtMs
+                            val readyToFrameMs = if (mediaReadyAtMs > 0L) now - mediaReadyAtMs else -1L
+                            Timber.i(
+                                "DLNA/media first frame in ${totalMs}ms " +
+                                    "(ready-to-frame=${readyToFrameMs}ms decoder=$lastDecoderName " +
+                                    "decoder-init=${lastDecoderInitDurationMs}ms) uri=$mediaUri"
+                            )
+                        }
+                        mediaLoadStartedAtMs = 0L
+                        mediaReadyAtMs = 0L
                     }
 
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -287,6 +310,8 @@ class PlayerActivity : AppCompatActivity() {
 
                     override fun onPlayerError(error: PlaybackException) {
                         Timber.e(error, "Player error")
+                        mediaLoadStartedAtMs = 0L
+                        mediaReadyAtMs = 0L
                         updateBufferingState(false)
                         tvStatus.text = "播放错误"
                         tvError.text = "播放错误: ${error.message ?: "未知错误"}"
@@ -301,6 +326,17 @@ class PlayerActivity : AppCompatActivity() {
                         bitrateEstimate: Long
                     ) {
                         bandwidthEstimateBps = bitrateEstimate
+                    }
+
+                    override fun onVideoDecoderInitialized(
+                        eventTime: AnalyticsListener.EventTime,
+                        decoderName: String,
+                        initializedTimestampMs: Long,
+                        initializationDurationMs: Long
+                    ) {
+                        lastDecoderName = decoderName
+                        lastDecoderInitDurationMs = initializationDurationMs
+                        Timber.d("Video decoder initialized name=$decoderName duration=${initializationDurationMs}ms")
                     }
                 })
             }
@@ -455,13 +491,32 @@ class PlayerActivity : AppCompatActivity() {
             ?: intent?.getStringExtra(EXTRA_MEDIA_TITLE)?.let { arrayListOf(it) }
             ?: arrayListOf()
 
-        playlist = list.filter { it.isNotBlank() }
+        val nextPlaylist = list.filter { it.isNotBlank() }
+        playlist = nextPlaylist
         playlistTitles = titles
+        rebuildMediaItemCacheIfNeeded(nextPlaylist)
         currentIndex = intent?.getIntExtra(EXTRA_START_INDEX, 0)?.coerceIn(0, (playlist.size - 1).coerceAtLeast(0)) ?: 0
 
         if (playlist.isNotEmpty()) {
             playCurrent()
         }
+    }
+
+    private fun rebuildMediaItemCacheIfNeeded(nextPlaylist: List<String>) {
+        if (cachedPlaylistSignature == nextPlaylist && cachedVideoIndexByPlaylistIndex.size == nextPlaylist.size) return
+
+        val mapping = IntArray(nextPlaylist.size) { -1 }
+        val items = ArrayList<MediaItem>(nextPlaylist.size)
+        nextPlaylist.forEachIndexed { index, itemUri ->
+            if (!isImageUri(itemUri)) {
+                mapping[index] = items.size
+                items += createMediaItem(itemUri)
+            }
+        }
+        cachedPlaylistSignature = nextPlaylist.toList()
+        cachedVideoIndexByPlaylistIndex = mapping
+        cachedVideoMediaItems = items
+        Timber.d("Prepared ${items.size} cached MediaItems for playlist size=${nextPlaylist.size}")
     }
 
     private fun playCurrent() {
@@ -592,30 +647,29 @@ class PlayerActivity : AppCompatActivity() {
         mirrorSurfaceView.visibility = View.GONE
         imageView.visibility = View.GONE
         playerView.visibility = View.VISIBLE
-        playerView.player = player
+        if (playerView.player !== player) playerView.player = player
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
 
         try {
             tvError.visibility = View.GONE
             updateBufferingState(true)
             mediaLoadStartedAtMs = SystemClock.elapsedRealtime()
+            mediaReadyAtMs = 0L
+            lastDecoderName = ""
+            lastDecoderInitDurationMs = -1L
 
-            val mediaItem = createMediaItem(uri)
-            val items = playlist.mapIndexedNotNull { index, itemUri ->
-                if (!isImageUri(itemUri)) {
-                    createMediaItem(itemUri).also { if (index == currentIndex) mediaUri = itemUri }
-                } else null
-            }
-            if (playlist.size > 1 && items.isNotEmpty()) {
-                val videoIndex = playlist.take(currentIndex + 1).count { !isImageUri(it) } - 1
-                player?.setMediaItems(items, videoIndex.coerceAtLeast(0), 0L)
+            if (playlist.size > 1 && cachedVideoMediaItems.isNotEmpty()) {
+                val videoIndex = cachedVideoIndexByPlaylistIndex.getOrNull(currentIndex)?.takeIf { it >= 0 } ?: 0
+                player?.setMediaItems(cachedVideoMediaItems, videoIndex, 0L)
             } else {
-                player?.setMediaItem(mediaItem)
+                player?.setMediaItem(createMediaItem(uri))
             }
             player?.playWhenReady = true
             player?.prepare()
         } catch (e: Exception) {
             Timber.e(e, "Error playing media")
+            mediaLoadStartedAtMs = 0L
+            mediaReadyAtMs = 0L
             tvStatus.text = "播放错误"
             tvError.text = "播放错误: ${e.message ?: "未知错误"}"
             tvError.visibility = View.VISIBLE
@@ -979,6 +1033,9 @@ class PlayerActivity : AppCompatActivity() {
         player?.release()
         player = null
         trackSelector = null
+        cachedVideoMediaItems = emptyList()
+        cachedVideoIndexByPlaylistIndex = IntArray(0)
+        cachedPlaylistSignature = emptyList()
         reportPlaybackStopped()
         Timber.i("PlayerActivity destroyed")
     }

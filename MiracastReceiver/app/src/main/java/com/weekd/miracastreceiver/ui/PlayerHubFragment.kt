@@ -21,6 +21,7 @@ class PlayerHubFragment : Fragment(), MainActivity.TvPage {
     private lateinit var tvSource: TextView
     private lateinit var tvUri: TextView
     private var refreshJob: Job? = null
+    private var lastSnapshot: RuntimeState.PlaybackSnapshot? = null
 
     override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, state: Bundle?): View =
         inflater.inflate(R.layout.fragment_player_hub, container, false)
@@ -30,14 +31,18 @@ class PlayerHubFragment : Fragment(), MainActivity.TvPage {
         tvTitle = view.findViewById(R.id.tv_player_title)
         tvSource = view.findViewById(R.id.tv_player_source)
         tvUri = view.findViewById(R.id.tv_player_uri)
-        refresh()
     }
 
     override fun onStart() {
         super.onStart()
+        refreshJob?.cancel()
         refreshJob = viewLifecycleOwner.lifecycleScope.launch {
             while (isActive) {
-                refresh()
+                val snapshot = RuntimeState.playbackSnapshot()
+                if (snapshot != lastSnapshot) {
+                    render(snapshot)
+                    lastSnapshot = snapshot
+                }
                 delay(1_000)
             }
         }
@@ -49,9 +54,8 @@ class PlayerHubFragment : Fragment(), MainActivity.TvPage {
         super.onStop()
     }
 
-    private fun refresh() {
+    private fun render(snapshot: RuntimeState.PlaybackSnapshot) {
         if (!isAdded) return
-        val snapshot = RuntimeState.playbackSnapshot()
         tvState.text = getString(R.string.player_hub_state, snapshot.state)
         tvTitle.text = snapshot.title.ifBlank { getString(R.string.player_hub_nothing_playing) }
         tvSource.text = getString(R.string.player_hub_source, snapshot.source.ifBlank { "-" })

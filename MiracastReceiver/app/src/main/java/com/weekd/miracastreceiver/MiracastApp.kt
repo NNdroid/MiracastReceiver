@@ -1,6 +1,7 @@
 package com.weekd.miracastreceiver
 
 import android.app.Application
+import com.weekd.miracastreceiver.cast.GoogleCastReceiver
 import com.weekd.miracastreceiver.util.LegacyUiLocalizer
 import com.weekd.miracastreceiver.utils.NetworkUtils
 import com.weekd.miracastreceiver.web.WebLogBuffer
@@ -20,6 +21,10 @@ class MiracastApp : Application() {
         if (BuildConfig.DEBUG) {
             Timber.plant(Timber.DebugTree())
         }
+
+        // Optional official Google Cast Connect integration. A normal build with no Cast App ID
+        // keeps this disabled and therefore remains compatible with non-Google Android TV devices.
+        GoogleCastReceiver.initialize(this)
 
         Timber.i("MiracastApp initialized")
     }

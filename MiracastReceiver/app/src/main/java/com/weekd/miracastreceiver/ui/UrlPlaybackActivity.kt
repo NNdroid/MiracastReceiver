@@ -16,6 +16,7 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
@@ -25,6 +26,7 @@ import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
 import com.weekd.miracastreceiver.R
@@ -48,16 +50,10 @@ class UrlPlaybackActivity : AppCompatActivity() {
         const val EXTRA_HEADERS_JSON = "url_playback_headers_json"
         private const val MAX_RETRY_ATTEMPTS = 5
         private val RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L)
-
-        // Fast-start profile for LAN/WebUI playback. Keep enough headroom for bursty HLS/DASH,
-        // but do not make the viewer wait for the large VOD-oriented default startup buffer.
         private const val MIN_BUFFER_MS = 1_500
         private const val MAX_BUFFER_MS = 15_000
         private const val START_BUFFER_MS = 350
         private const val REBUFFER_MS = 900
-
-        // Live HLS/DASH should start close to the live edge. These are deliberately conservative
-        // enough for home Wi-Fi while avoiding multi-second latency inherited from stream defaults.
         private const val LIVE_TARGET_OFFSET_MS = 1_500L
         private const val LIVE_MIN_OFFSET_MS = 750L
         private const val LIVE_MAX_OFFSET_MS = 4_000L
@@ -68,6 +64,7 @@ class UrlPlaybackActivity : AppCompatActivity() {
     private lateinit var playerView: PlayerView
     private lateinit var tvTitle: TextView
     private lateinit var tvStatus: TextView
+    private lateinit var tvPlaybackMeta: TextView
     private lateinit var tvError: TextView
     private lateinit var bufferingIndicator: ProgressBar
 
@@ -82,10 +79,8 @@ class UrlPlaybackActivity : AppCompatActivity() {
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var waitingForNetwork = false
     private var loadStartedAtMs = 0L
+    private var bandwidthEstimateBps = 0L
 
-    // Keep one transport pool for the entire Activity. HLS/DASH fan out from manifest -> init/media
-    // segments, so connection/TLS reuse and HTTP/2 multiplexing reduce first-frame and channel-switch
-    // overhead compared with repeatedly opening independent URLConnection-style connections.
     private val httpClient: OkHttpClient by lazy {
         OkHttpClient.Builder()
             .connectTimeout(6, TimeUnit.SECONDS)
@@ -104,7 +99,10 @@ class UrlPlaybackActivity : AppCompatActivity() {
                 PlayerActivity.ACTION_PLAY -> player?.play()
                 PlayerActivity.ACTION_PAUSE -> player?.pause()
                 PlayerActivity.ACTION_STOP -> { player?.stop(); finish() }
-                PlayerActivity.ACTION_SEEK -> player?.seekTo(intent.getLongExtra(PlayerActivity.EXTRA_SEEK_POSITION, 0L).coerceAtLeast(0L))
+                PlayerActivity.ACTION_SEEK -> {
+                    player?.seekTo(intent.getLongExtra(PlayerActivity.EXTRA_SEEK_POSITION, 0L).coerceAtLeast(0L))
+                    updatePlaybackMeta()
+                }
                 PlayerActivity.ACTION_SET_VOLUME -> {
                     val volume = intent.getIntExtra(PlayerActivity.EXTRA_VOLUME, 100).coerceIn(0, 100)
                     player?.volume = volume / 100f
@@ -114,6 +112,7 @@ class UrlPlaybackActivity : AppCompatActivity() {
                     val speed = intent.getFloatExtra(PlayerActivity.EXTRA_SPEED, 1f).coerceIn(0.25f, 4f)
                     player?.setPlaybackSpeed(speed)
                     RuntimeState.playbackSpeed = speed
+                    updatePlaybackMeta()
                 }
             }
         }
@@ -127,11 +126,16 @@ class UrlPlaybackActivity : AppCompatActivity() {
         playerView = findViewById(R.id.player_view)
         tvTitle = findViewById(R.id.tv_title)
         tvStatus = findViewById(R.id.tv_status)
+        tvPlaybackMeta = findViewById(R.id.tv_playback_meta)
         tvError = findViewById(R.id.tv_error)
         bufferingIndicator = findViewById(R.id.buffering_indicator)
         findViewById<View>(R.id.airplay_mirror_surface).visibility = View.GONE
         findViewById<View>(R.id.image_view).visibility = View.GONE
         playerView.visibility = View.VISIBLE
+        playerView.setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
+            findViewById<View>(R.id.status_bar).visibility = visibility
+            if (visibility == View.VISIBLE) updatePlaybackMeta()
+        })
 
         registerControls()
         registerNetworkRecovery()
@@ -164,9 +168,8 @@ class UrlPlaybackActivity : AppCompatActivity() {
         val exo = ensurePlayer()
         tvTitle.text = currentTitle
         tvError.visibility = View.GONE
+        updatePlaybackMeta()
 
-        // Some senders repeat the same SetAVTransportURI/open-url while playback is already being
-        // prepared. Treat that as an idempotent update instead of throwing away buffered data.
         val activeUrl = exo.currentMediaItem?.localConfiguration?.uri?.toString()
         if (activeUrl == currentUrl && exo.playbackState != Player.STATE_IDLE) {
             Timber.d("URL playback request already active; keeping buffer/decoder: $currentUrl")
@@ -180,10 +183,6 @@ class UrlPlaybackActivity : AppCompatActivity() {
 
         bufferingIndicator.visibility = View.VISIBLE
         loadStartedAtMs = SystemClock.elapsedRealtime()
-
-        // setMediaItem(resetPosition=true) replaces the timeline without stop()/clearMediaItems().
-        // Keeping the ExoPlayer instance alive lets Media3 reuse its playback thread, renderers and
-        // decoder resources when the next URL is compatible, which reduces channel-switch latency.
         exo.setMediaItem(createMediaItem(currentUrl), true)
         exo.playWhenReady = true
         exo.prepare()
@@ -237,11 +236,13 @@ class UrlPlaybackActivity : AppCompatActivity() {
                         val startupMs = if (loadStartedAtMs > 0L) SystemClock.elapsedRealtime() - loadStartedAtMs else -1L
                         if (startupMs >= 0L) Timber.i("URL playback ready in ${startupMs}ms: $currentUrl")
                         loadStartedAtMs = 0L
+                        updatePlaybackMeta()
                         updateSnapshot(if (created.isPlaying) "PLAYING" else "READY")
                     }
                     Player.STATE_ENDED -> {
                         bufferingIndicator.visibility = View.GONE
                         tvStatus.setText(R.string.playback_finished)
+                        updatePlaybackMeta()
                         updateSnapshot("ENDED")
                     }
                     Player.STATE_IDLE -> updateSnapshot("IDLE")
@@ -251,6 +252,7 @@ class UrlPlaybackActivity : AppCompatActivity() {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 if (created.playbackState == Player.STATE_READY) {
                     tvStatus.setText(if (isPlaying) R.string.playing else R.string.paused)
+                    updatePlaybackMeta()
                     updateSnapshot(if (isPlaying) "PLAYING" else "PAUSED")
                 }
             }
@@ -259,11 +261,18 @@ class UrlPlaybackActivity : AppCompatActivity() {
                 Timber.w(error, "URL playback error for $currentUrl")
                 bufferingIndicator.visibility = View.GONE
                 RuntimeState.playbackError = error.message.orEmpty()
-                if (isRetryable(error) && retryAttempt < MAX_RETRY_ATTEMPTS) {
-                    scheduleRetry(error)
-                } else {
-                    showFatalError(error.message ?: getString(R.string.error_unknown))
-                }
+                if (isRetryable(error) && retryAttempt < MAX_RETRY_ATTEMPTS) scheduleRetry(error)
+                else showFatalError(error.message ?: getString(R.string.error_unknown))
+            }
+        })
+        created.addAnalyticsListener(object : AnalyticsListener {
+            override fun onBandwidthEstimate(
+                eventTime: AnalyticsListener.EventTime,
+                totalLoadTimeMs: Int,
+                totalBytesLoaded: Long,
+                bitrateEstimate: Long
+            ) {
+                bandwidthEstimateBps = bitrateEstimate
             }
         })
         player = created
@@ -297,6 +306,40 @@ class UrlPlaybackActivity : AppCompatActivity() {
             )
         }
         return builder.build()
+    }
+
+    private fun updatePlaybackMeta() {
+        val exo = player
+        val clean = currentUrl.substringBefore('?').substringBefore('#').lowercase()
+        val source = when {
+            clean.endsWith(".m3u8") -> "HLS"
+            clean.endsWith(".mpd") -> "DASH"
+            else -> "WEB URL"
+        }
+        val parts = mutableListOf(source)
+        val videoSize = exo?.videoSize
+        if ((videoSize?.width ?: 0) > 0 && (videoSize?.height ?: 0) > 0) {
+            parts += "${videoSize!!.width}×${videoSize.height}"
+        }
+        val format = exo?.videoFormat
+        format?.sampleMimeType?.let { parts += StreamInfoTracker.formatCodec(it) }
+        format?.frameRate?.takeIf { it > 0f }?.let { parts += StreamInfoTracker.formatFps(it) }
+        val bitrateBps = listOfNotNull(format?.bitrate, format?.averageBitrate, format?.peakBitrate)
+            .firstOrNull { it != Format.NO_VALUE }?.toLong() ?: 0L
+        if (bitrateBps > 0) parts += StreamInfoTracker.formatBitrate(bitrateBps)
+        if (bandwidthEstimateBps > 0) parts += "↓${StreamInfoTracker.formatSpeed(bandwidthEstimateBps / 8)}"
+        val duration = exo?.duration?.takeIf { it > 0 } ?: 0L
+        if (duration > 0) parts += "${formatTimeMs(exo?.currentPosition ?: 0L)} / ${formatTimeMs(duration)}"
+        tvPlaybackMeta.text = parts.joinToString("  •  ")
+    }
+
+    private fun formatTimeMs(ms: Long): String {
+        val totalSeconds = ms.coerceAtLeast(0L) / 1000
+        val hours = totalSeconds / 3600
+        val minutes = (totalSeconds % 3600) / 60
+        val seconds = totalSeconds % 60
+        return if (hours > 0) String.format("%d:%02d:%02d", hours, minutes, seconds)
+        else String.format("%d:%02d", minutes, seconds)
     }
 
     private fun scheduleRetry(error: PlaybackException) {
@@ -371,6 +414,7 @@ class UrlPlaybackActivity : AppCompatActivity() {
             while (isActive) {
                 delay(1_000)
                 updateSnapshot()
+                updatePlaybackMeta()
             }
         }
     }

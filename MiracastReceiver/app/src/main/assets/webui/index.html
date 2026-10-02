@@ -28,9 +28,7 @@
         <button class="nav" data-page="system"><span class="nav-icon">⚙</span><span data-i18n="navSystem"></span></button>
         <button class="nav" data-page="logs"><span class="nav-icon">≡</span><span data-i18n="navLogs"></span></button>
       </nav>
-      <div class="sidebar-footer">
-        <span class="sidebar-label" data-i18n="lanConnection"></span><strong id="sidebarAddress" data-i18n="waitingNetwork"></strong><span data-i18n="localTokenAuth"></span>
-      </div>
+      <div class="sidebar-footer"><span class="sidebar-label" data-i18n="lanConnection"></span><strong id="sidebarAddress" data-i18n="waitingNetwork"></strong><span data-i18n="localTokenAuth"></span></div>
     </aside>
 
     <div class="workspace">
@@ -85,9 +83,17 @@
           <article class="panel player-panel"><div class="now-playing"><span class="now-icon">▶</span><div><strong id="nowTitle" data-i18n="nothingPlaying"></strong><span id="nowSource">-</span></div></div><div class="progress"><div id="progressFill"></div></div><div id="progressText" class="muted progress-label">00:00 / 00:00</div><div class="player-buttons"><button data-player="pause" data-i18n="pause"></button><button class="primary play-main" data-player="play" data-i18n="play"></button><button data-player="stop" data-i18n="stop"></button></div><div class="form-grid compact"><label><span data-i18n="seekSeconds"></span><input id="seekSeconds" type="number" min="0" value="0"></label><label><span data-i18n="volume"></span><input id="volumeValue" type="number" min="0" max="100" value="100"></label><label><span data-i18n="speed"></span><input id="speedValue" type="number" min="0.25" max="4" step="0.25" value="1"></label></div><div class="actions"><button id="seekBtn" data-i18n="seek"></button><button id="volumeBtn" data-i18n="setVolume"></button><button id="speedBtn" data-i18n="setSpeed"></button></div><div class="status-list top-gap premium-list"><div><span data-i18n="currentDecoder"></span><b id="activeDecoder">-</b></div><div><span data-i18n="hardwareAcceleration"></span><b id="activeHardware">-</b></div></div></article>
         </section>
 
-        <section id="page-system" class="page"><div class="page-intro"><p class="eyebrow">SYSTEM &amp; BACKGROUND</p><h2 data-i18n="systemTitle"></h2><p data-i18n="systemIntro"></p></div><form id="systemForm"><article class="panel"><div class="switch-grid">
-          <label class="switch-row"><span><b data-i18n="enableWebui"></b><small data-i18n="enableWebuiDesc"></small></span><input id="webUiEnabled" type="checkbox"><i></i></label><label class="switch-row"><span><b data-i18n="tokenAuth"></b><small data-i18n="tokenAuthDesc"></small></span><input id="webUiAuthRequired" type="checkbox"><i></i></label><label class="switch-row"><span><b data-i18n="autoStart"></b><small>BootReceiver + Magisk service.d</small></span><input id="autoStartOnBoot" type="checkbox"><i></i></label>
-          </div><div class="form-grid port-grid"><label><span data-i18n="preferredPort"></span><input id="webUiPort" type="number" min="1024" max="65535"><small data-i18n="preferredPortDesc"></small></label><label><span data-i18n="runtimePort"></span><input id="runtimePortInput" type="text" readonly><small id="portNotice"></small></label></div><div class="actions"><button type="button" id="optimizeBtn" data-i18n="optimizeBackground"></button><button type="button" id="rotateTokenBtn" data-i18n="rotateToken"></button><button type="submit" class="primary" data-i18n="saveApply"></button></div></article></form><article class="panel diagnostics-panel"><div class="panel-head"><div><p class="eyebrow">DIAGNOSTICS</p><h2 data-i18n="diagnosticSnapshot"></h2></div></div><pre id="diagnostics" data-i18n="loading"></pre></article></section>
+        <section id="page-system" class="page"><div class="page-intro"><p class="eyebrow">SYSTEM &amp; BACKGROUND</p><h2 data-i18n="systemTitle"></h2><p data-i18n="systemIntro"></p></div><form id="systemForm"><article class="panel">
+          <div class="switch-grid"><label class="switch-row"><span><b data-i18n="enableWebui"></b><small data-i18n="enableWebuiDesc"></small></span><input id="webUiEnabled" type="checkbox"><i></i></label><label class="switch-row"><span><b data-i18n="autoStart"></b><small>BootReceiver + Magisk service.d</small></span><input id="autoStartOnBoot" type="checkbox"><i></i></label></div>
+          <input id="webUiAuthRequired" type="checkbox" hidden>
+          <div class="panel-title top-gap"><div><h2 id="authModeTitle">WebUI authentication</h2><p id="authModeDescription">Choose how clients authenticate to the management API.</p></div></div>
+          <div class="form-grid">
+            <label><span id="authModeLabel">Authentication mode</span><select id="webUiAuthMode"><option value="auto">Generated token (recommended)</option><option value="custom">Custom token</option><option value="none">No authentication</option></select><small id="authModeHint">Generated tokens are persistent and embedded in the TV QR code.</small></label>
+            <label id="customTokenField" hidden><span id="customTokenLabel">Custom token</span><input id="webUiCustomToken" type="password" minlength="8" maxlength="128" autocomplete="new-password"><small id="customTokenHint">8–128 characters; spaces and control characters are not allowed.</small></label>
+          </div>
+          <div class="form-grid port-grid"><label><span data-i18n="preferredPort"></span><input id="webUiPort" type="number" min="1024" max="65535"><small data-i18n="preferredPortDesc"></small></label><label><span data-i18n="runtimePort"></span><input id="runtimePortInput" type="text" readonly><small id="portNotice"></small></label></div>
+          <div class="actions"><button type="button" id="optimizeBtn" data-i18n="optimizeBackground"></button><button type="button" id="rotateTokenBtn" data-i18n="rotateToken"></button><button type="submit" class="primary" data-i18n="saveApply"></button></div>
+          </article></form><article class="panel diagnostics-panel"><div class="panel-head"><div><p class="eyebrow">DIAGNOSTICS</p><h2 data-i18n="diagnosticSnapshot"></h2></div></div><pre id="diagnostics" data-i18n="loading"></pre></article></section>
 
         <section id="page-logs" class="page"><div class="page-intro"><p class="eyebrow">LIVE TELEMETRY</p><h2 data-i18n="liveLogs"></h2><p data-i18n="liveLogsIntro"></p></div><article class="panel log-panel"><div class="panel-head"><div><h2>Receiver Log</h2><span class="muted" data-i18n="last400"></span></div><div><button id="refreshLogsBtn" data-i18n="refresh"></button><button id="clearLogsBtn" data-i18n="clear"></button></div></div><pre id="logs" data-i18n="loading"></pre></article></section>
         <div id="toast" class="toast hidden"></div>
@@ -95,5 +101,6 @@
     </div>
   </div>
   <script src="/app.js"></script>
+  <script src="/auth-modes.js"></script>
 </body>
 </html>

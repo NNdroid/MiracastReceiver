@@ -8,11 +8,9 @@
         <item name="android:statusBarColor">@color/background_dark</item>
         <item name="android:fontFamily">sans</item>
         <item name="android:windowNoTitle">true</item>
-        <item name="android:windowLightStatusBar">@bool/light_system_bars</item>
-        <item name="android:windowLightNavigationBar">@bool/light_system_bars</item>
     </style>
 
-    <!-- Playback stays visually neutral/black; AppCompat DayNight still keeps dialogs and controls coherent. -->
+    <!-- Playback stays visually neutral/black; DayNight still keeps dialogs and controls coherent. -->
     <style name="Theme.Leanback.Fullscreen" parent="Theme.AppCompat.DayNight.NoActionBar">
         <item name="android:windowFullscreen">true</item>
         <item name="android:windowNoTitle">true</item>

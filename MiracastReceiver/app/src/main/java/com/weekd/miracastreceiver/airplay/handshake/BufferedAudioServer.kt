@@ -1,6 +1,7 @@
 ﻿package com.weekd.miracastreceiver.airplay.handshake
 
 import com.weekd.miracastreceiver.util.Logger
+import com.weekd.miracastreceiver.utils.PortUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -8,21 +9,14 @@ import java.net.ServerSocket
 import java.net.Socket
 
 /**
- * BufferedAudioServer — receives the AirPlay 2 *buffered* (audio-only) stream, i.e. AirPlaying from
- * Apple Music / Control Center → TV WITHOUT screen mirroring (stream type 103).
+ * BufferedAudioServer — receives the AirPlay 2 buffered audio-only stream.
  *
- * Unlike the realtime mirroring audio (type 96, UDP), buffered audio arrives over a TCP data
- * connection: the sender streams ahead and the receiver plays from a buffer, scheduled against an
- * anchor time provided by SETRATEANCHORTIME.
- *
- * STATUS: accept-only. It accepts the TCP connection (so macOS doesn't abort) and logs the framing
- * of the first packets. Playback isn't wired: macOS Apple Music never takes this path (it uses legacy
- * RAOP), and the AirPlay 2 buffered stream is FairPlay-2-encrypted, which no FOSS receiver can
- * decrypt. Kept for senders that do reach it and for protocol reference (AudioStreamServer/AudioPlayer).
+ * The SETUP-negotiated TCP port is explicitly dual-stack. AirPlay control may arrive over IPv6;
+ * returning an IPv4-only ephemeral data port would make the sender abort immediately afterwards.
  */
 class BufferedAudioServer {
 
-    private val serverSocket = ServerSocket(0)   // OS-assigned port, returned in the SETUP response
+    private val serverSocket: ServerSocket = PortUtils.bindEphemeralServerSocket()
     @Volatile private var running = false
     @Volatile private var client: Socket? = null
 
@@ -43,7 +37,7 @@ class BufferedAudioServer {
 
     private fun runReceive() {
         try {
-            Logger.i("BufferedAudioServer (audio-only) listening on TCP $dataPort")
+            Logger.i("BufferedAudioServer (audio-only) listening dual-stack on TCP $dataPort")
             val socket = serverSocket.accept().also { client = it }
             Logger.i("Buffered audio connection from ${socket.inetAddress.hostAddress}")
             val input = socket.getInputStream()
@@ -54,7 +48,6 @@ class BufferedAudioServer {
                 val n = input.read(buf)
                 if (n < 0) break
                 totalBytes += n
-                // Log the framing of the first few reads (length prefix / RTP header / payload).
                 if (reads < 12) {
                     Logger.d("Buffered audio read[$reads] ${n}B head=${hex(buf, minOf(28, n))}")
                     reads++
@@ -71,4 +64,3 @@ class BufferedAudioServer {
             (0 until minOf(len, b.size)).joinToString(" ") { "%02x".format(b[it]) }
     }
 }
-

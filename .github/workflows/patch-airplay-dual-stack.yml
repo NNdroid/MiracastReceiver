@@ -1,0 +1,54 @@
+name: Patch AirPlay dual-stack listeners
+
+on:
+  push:
+    branches: [fix/airplay-dual-stack]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Patch fixed and event TCP listeners
+        shell: python
+        run: |
+          from pathlib import Path
+
+          rtsp = Path('MiracastReceiver/app/src/main/java/com/weekd/miracastreceiver/airplay/RtspHandler.kt')
+          text = rtsp.read_text(encoding='utf-8-sig')
+          if 'import com.weekd.miracastreceiver.utils.PortUtils' not in text:
+              text = text.replace('import com.weekd.miracastreceiver.util.Logger\n', 'import com.weekd.miracastreceiver.util.Logger\nimport com.weekd.miracastreceiver.utils.PortUtils\n')
+          old = '''return ServerSocket().apply {
+                    reuseAddress = true
+                    bind(java.net.InetSocketAddress(RTSP_PORT))
+                }'''
+          new = 'return PortUtils.bindFixedServerSocket(RTSP_PORT)'
+          if old not in text and new not in text:
+              raise SystemExit('RTSP bind pattern not found')
+          text = text.replace(old, new)
+          rtsp.write_text(text, encoding='utf-8')
+
+          receiver = Path('MiracastReceiver/app/src/main/java/com/weekd/miracastreceiver/airplay/AirPlayReceiver.kt')
+          text = receiver.read_text(encoding='utf-8-sig')
+          if 'import com.weekd.miracastreceiver.utils.PortUtils' not in text:
+              text = text.replace('import com.weekd.miracastreceiver.util.Logger\n', 'import com.weekd.miracastreceiver.util.Logger\nimport com.weekd.miracastreceiver.utils.PortUtils\n')
+          if 'val event = ServerSocket(0)' not in text and 'val event = PortUtils.bindEphemeralServerSocket()' not in text:
+              raise SystemExit('AirPlay event bind pattern not found')
+          text = text.replace('val event = ServerSocket(0)', 'val event = PortUtils.bindEphemeralServerSocket()')
+          receiver.write_text(text, encoding='utf-8')
+
+          workflow = Path('.github/workflows/patch-airplay-dual-stack.yml')
+          workflow.unlink()
+      - name: Commit patch
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix: make AirPlay RTSP and event listeners dual-stack"
+          git push origin HEAD:fix/airplay-dual-stack

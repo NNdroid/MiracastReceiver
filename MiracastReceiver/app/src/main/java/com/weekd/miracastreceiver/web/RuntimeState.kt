@@ -9,6 +9,8 @@ object RuntimeState {
     @Volatile var serviceStartedAtMs: Long = 0L
     @Volatile var networkIp: String = ""
     @Volatile var lastError: String = ""
+    @Volatile var webUiPreferredPort: Int = 0
+    @Volatile var webUiPort: Int = 0
 
     @Volatile var airPlayState: String = "IDLE"
     @Volatile var airPlaySender: String = ""

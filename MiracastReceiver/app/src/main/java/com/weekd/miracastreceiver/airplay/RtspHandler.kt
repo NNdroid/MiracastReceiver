@@ -30,6 +30,7 @@ open class RtspHandler(
     private val videoSurfaceProvider: () -> android.view.Surface?,
     private val onStreamingStarted: (session: SessionDescription) -> Unit,
     private val onStreamingStopped: () -> Unit,
+    private val onPeerAddressKnown: (java.net.InetAddress) -> Unit = {},
     private val onPhotoReceived: (bytes: ByteArray, imageType: PhotoImageType) -> Unit = { _, _ -> },
     private val onPhotoCleared: () -> Unit = {},
     /**
@@ -220,6 +221,7 @@ open class RtspHandler(
         // PIN/verifier and the "paired" flag must survive a reconnect. They live for the receiver's
         // lifetime — replaced by the next /pair-pin-start, set on a successful pairing.
         currentRemoteAddress = socket.inetAddress
+        onPeerAddressKnown(socket.inetAddress)
 
         try {
             while (running && !socket.isClosed) {

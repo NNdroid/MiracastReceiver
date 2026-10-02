@@ -10,10 +10,9 @@ import java.net.Socket
 /**
  * Wi-Fi Display (Miracast) session starter.
  *
- * In standard WFD the Source is the RTSP TCP server and the Sink connects to it. The well-known
- * default control port is 7236, but a Source may advertise a different control port. Android/
- * HyperOS sources are therefore handled through [WfdSourceHint] first and the legacy /24 scan on
- * 7236 is retained only as a compatibility fallback.
+ * In standard WFD the Source is the RTSP TCP server and the Sink connects to it. The Source may
+ * choose an ephemeral RTSP control port, so endpoint hints from Android and wpa_supplicant are
+ * preferred over the legacy 7236 fallback.
  */
 class WfdServer(
     private val context: Context,
@@ -38,7 +37,11 @@ class WfdServer(
         private const val CONNECT_TIMEOUT_MS = 450
         private const val SCAN_CHUNK = 32
         private const val RTSP_SOCKET_TIMEOUT_MS = 30_000
+        private const val ROOT_PORT_REFRESH_MS = 5_000L
     }
+
+    private var lastRootPortProbeAt = 0L
+    private var lastRootDiscoveredPort: Int? = null
 
     fun start() {
         if (isRunning) {
@@ -61,30 +64,37 @@ class WfdServer(
         }
     }
 
-    /**
-     * Keep the socket that succeeds. Opening a probe connection and closing it before the actual
-     * RTSP session can make one-shot Source listeners disappear and cause an immediate connection
-     * failure on the second connect.
-     */
+    /** Keep the socket that succeeds; some Sources accept only one RTSP connection per attempt. */
     private suspend fun dialSource(): Socket? = coroutineScope {
         val hint = WfdSourceHint.snapshot()
+        val supplicantPort = sourcePortFromSupplicant()
         val candidatePorts = buildList {
             hint.controlPort?.takeIf { it in 1..65535 }?.let { add(it) }
+            supplicantPort?.takeIf { it in 1..65535 && it !in this }?.let { add(it) }
             if (port !in this) add(port)
         }
 
-        // If the phone/PC is group owner, Android gives us its exact P2P address. Always try that
-        // before scanning the subnet; this also avoids accidentally hitting another service.
+        if (candidatePorts.isEmpty()) return@coroutineScope null
+        Timber.d(
+            "WFD: source candidates ip=${hint.ipAddress ?: "scan"} " +
+                "ports=${candidatePorts.joinToString()} frameworkPort=${hint.controlPort ?: "?"} " +
+                "supplicantPort=${supplicantPort ?: "?"}"
+        )
+
+        // If the Source is group owner, Android gives us the exact P2P address.
         hint.ipAddress?.let { ip ->
             for (candidatePort in candidatePorts) {
                 if (!isRunning) return@coroutineScope null
                 tryConnect(ip, candidatePort)?.let { socket ->
                     Timber.i("WFD: connected to hinted source $ip:$candidatePort")
+                    WfdSourceHint.update(ipAddress = ip, controlPort = candidatePort, reason = "rtsp-dial")
                     return@coroutineScope socket
                 }
             }
         }
 
+        // If this Sink is GO, the Source is a P2P client and Android does not expose its IP. Probe
+        // the active P2P subnet, but only on the learned Source port(s) plus standards fallback.
         val prefix = p2pSubnetPrefix() ?: return@coroutineScope null
         for (candidatePort in candidatePorts) {
             for (chunkStart in 2..254 step SCAN_CHUNK) {
@@ -97,15 +107,36 @@ class WfdServer(
                 if (connected.isNotEmpty()) {
                     val session = connected.first()
                     connected.drop(1).forEach { runCatching { it.close() } }
+                    val sourceIp = session.inetAddress.hostAddress
                     Timber.i(
-                        "WFD: connected to scanned source ${session.inetAddress.hostAddress}:$candidatePort " +
-                            "(hintPort=${hint.controlPort ?: "none"})"
+                        "WFD: connected to scanned source $sourceIp:$candidatePort " +
+                            "(frameworkPort=${hint.controlPort ?: "none"} supplicantPort=${supplicantPort ?: "none"})"
+                    )
+                    WfdSourceHint.update(
+                        ipAddress = sourceIp,
+                        controlPort = candidatePort,
+                        reason = "rtsp-scan"
                     )
                     return@coroutineScope session
                 }
             }
         }
         null
+    }
+
+    private fun sourcePortFromSupplicant(): Int? {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (lastRootPortProbeAt != 0L && now - lastRootPortProbeAt < ROOT_PORT_REFRESH_MS) {
+            return lastRootDiscoveredPort
+        }
+        lastRootPortProbeAt = now
+        lastRootDiscoveredPort = runCatching { WfdRootHelper.discoverSourceControlPort(context) }
+            .onFailure { Timber.d("WFD: supplicant Source-port query failed: ${it.message}") }
+            .getOrNull()
+        lastRootDiscoveredPort?.let {
+            WfdSourceHint.update(controlPort = it, reason = "supplicant-peer-ie")
+        }
+        return lastRootDiscoveredPort
     }
 
     private fun tryConnect(ip: String, targetPort: Int): Socket? = try {
@@ -119,7 +150,6 @@ class WfdServer(
         null
     }
 
-    /** Resolve the active P2P IPv4 /24, commonly 192.168.49.0/24. */
     private fun p2pSubnetPrefix(): String? = try {
         NetworkInterface.getNetworkInterfaces().toList()
             .filter { it.name.startsWith("p2p") && it.isUp }

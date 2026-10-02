@@ -86,8 +86,10 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        runCatching { Shizuku.addRequestPermissionResultListener(shizukuPermissionListener) }
-            .onFailure { Timber.w(it, "Unable to register Shizuku permission listener") }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            runCatching { Shizuku.addRequestPermissionResultListener(shizukuPermissionListener) }
+                .onFailure { Timber.w(it, "Unable to register Shizuku permission listener") }
+        }
 
         initServices()
         initViews()
@@ -137,10 +139,6 @@ class MainActivity : AppCompatActivity() {
         if (!wifiPermissionPending && privilegedSetupAttempted) promptOverlayPermissionIfNeeded()
     }
 
-    /**
-     * Android 10+ normally blocks an Activity launch from the background. Root/Shizuku setup grants
-     * the overlay app-op automatically; this dialog remains as the non-privileged fallback.
-     */
     private fun promptOverlayPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
         if (overlayPromptShown || Settings.canDrawOverlays(this)) return
@@ -213,13 +211,10 @@ class MainActivity : AppCompatActivity() {
 
         tvDeviceName.text = deviceInfoProvider.getDeviceName()
         tvConnectionCode.text = getString(R.string.connection_code, connectionCode)
-
-        // TV quality requirement: always expose an obvious initial D-pad focus target.
         switchAutoStart.post { switchAutoStart.requestFocus() }
     }
 
     private fun checkNetworkAndStart() {
-        // The service has its own network-ready retry loop, so start it even before Wi-Fi obtains IP.
         startCastService()
 
         if (!NetworkUtils.isNetworkAvailable(this)) {
@@ -345,6 +340,7 @@ class MainActivity : AppCompatActivity() {
                 )
 
                 tvShizukuStatus.text = when {
+                    Build.VERSION.SDK_INT < Build.VERSION_CODES.M -> "○ Shizuku · Android 6+ 可用"
                     status.shizukuAuthorized -> "● Shizuku · 已连接并授权"
                     status.shizukuAlive -> "● Shizuku · 已连接，等待授权"
                     else -> "○ Shizuku · 未连接"
@@ -381,6 +377,7 @@ class MainActivity : AppCompatActivity() {
                 )
 
                 btnOptimizeBackground.text = if (
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
                     !status.rootAvailable && status.shizukuAlive && !status.shizukuAuthorized
                 ) {
                     "授权 Shizuku 并优化"
@@ -392,7 +389,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        runCatching { Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener) }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            runCatching { Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener) }
+        }
         Timber.i("MainActivity destroyed; background cast receiver remains active")
         super.onDestroy()
     }

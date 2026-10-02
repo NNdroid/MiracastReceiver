@@ -86,7 +86,7 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             runCatching { Shizuku.addRequestPermissionResultListener(shizukuPermissionListener) }
                 .onFailure { Timber.w(it, "Unable to register Shizuku permission listener") }
         }
@@ -340,7 +340,7 @@ class MainActivity : AppCompatActivity() {
                 )
 
                 tvShizukuStatus.text = when {
-                    Build.VERSION.SDK_INT < Build.VERSION_CODES.M -> "○ Shizuku · Android 6+ 可用"
+                    Build.VERSION.SDK_INT < Build.VERSION_CODES.N -> "○ Shizuku · Android 7+ 可用"
                     status.shizukuAuthorized -> "● Shizuku · 已连接并授权"
                     status.shizukuAlive -> "● Shizuku · 已连接，等待授权"
                     else -> "○ Shizuku · 未连接"
@@ -377,7 +377,7 @@ class MainActivity : AppCompatActivity() {
                 )
 
                 btnOptimizeBackground.text = if (
-                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.N &&
                     !status.rootAvailable && status.shizukuAlive && !status.shizukuAuthorized
                 ) {
                     "授权 Shizuku 并优化"
@@ -389,7 +389,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             runCatching { Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener) }
         }
         Timber.i("MainActivity destroyed; background cast receiver remains active")

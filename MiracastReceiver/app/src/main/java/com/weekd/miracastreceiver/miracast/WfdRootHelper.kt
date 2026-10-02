@@ -1,6 +1,7 @@
 package com.weekd.miracastreceiver.miracast
 
 import android.content.Context
+import android.os.Looper
 import android.os.SystemClock
 import timber.log.Timber
 import java.io.File
@@ -47,10 +48,16 @@ object WfdRootHelper {
     /**
      * Advertise this device as an available primary Miracast sink.
      *
-     * Extended Listen is important on TV devices that do not otherwise stay in a P2P Listen
-     * state. 500/1000 means the device is available for at least 500 ms every second while idle.
+     * If a legacy caller invokes this from the Android main thread, schedule the work in the
+     * background and return immediately. Supplicant access can be delayed by SELinux or su and
+     * must never stall activity/service startup.
      */
     fun advertiseSink(context: Context, controlPort: Int = 7236): Boolean {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            refreshAdvertisingAsync(context, controlPort)
+            return true
+        }
+
         val now = SystemClock.elapsedRealtime()
         synchronized(advertiseLock) {
             if (advertiseInProgress) {
@@ -65,7 +72,8 @@ object WfdRootHelper {
         }
 
         return try {
-            val binary = File(context.applicationInfo.nativeLibraryDir, BINARY_NAME)
+            val appContext = context.applicationContext
+            val binary = File(appContext.applicationInfo.nativeLibraryDir, BINARY_NAME)
             if (!binary.exists()) {
                 Timber.w("WFD: $BINARY_NAME not found in nativeLibraryDir")
                 return false
@@ -110,6 +118,11 @@ object WfdRootHelper {
 
     /** Disable listen timing and WFD advertisement when Miracast is turned off. */
     fun stopAdvertising(context: Context): Boolean {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            val appContext = context.applicationContext
+            Thread({ stopAdvertising(appContext) }, "wfd-stop").apply { isDaemon = true }.start()
+            return true
+        }
         synchronized(advertiseLock) {
             lastSuccessfulAdvertiseAt = 0L
         }

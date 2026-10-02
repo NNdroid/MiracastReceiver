@@ -9,26 +9,7 @@ import java.io.OutputStream
 import java.net.Socket
 import java.nio.charset.StandardCharsets
 
-/**
- * Wi-Fi Display RTSP 会话处理器（Sink 侧）。
- *
- * 重要：WFD 里 **Source 才是 RTSP 监听方**，Sink 必须主动连到 Source 的 7236 端口。
- * 这一点已对 Windows 11 的 MSMiracastSource 实测确认。连接建立后，双方在同一条 TCP 上
- * 互为客户端和服务端：
- *
- * ```
- * M1  Source → Sink   OPTIONS         本类回 200 + Public
- * M2  Sink   → Source OPTIONS         本类主动发
- * M3  Source → Sink   GET_PARAMETER   本类回能力集（必须含 wfd_client_rtp_ports）
- * M4  Source → Sink   SET_PARAMETER   选定格式 + presentation URL
- * M5  Source → Sink   SET_PARAMETER   wfd_trigger_method: SETUP
- * M6  Sink   → Source SETUP           本类主动发，带 client_port
- * M7  Sink   → Source PLAY            本类主动发，之后 RTP 开始流入
- * ```
- *
- * @param socket 已连接到 Source 的 TCP 连接
- * @param rtpPort 本机用于接收 RTP 的 UDP 端口，会在 M3 和 M6 里告知 Source
- */
+/** Wi-Fi Display RTSP session handler for the Sink side. */
 class WfdSessionHandler(
     private val context: Context,
     private val socket: Socket,
@@ -40,8 +21,10 @@ class WfdSessionHandler(
     private var outCseq = 0
     private var sessionId = ""
     private var presentationUrl = ""
-    private var playRequested = false
     private var streamStopNotified = false
+    private var optionsSent = false
+    private var setupCseq = -1
+    private var playCseq = -1
 
     var onSessionEstablished: ((sessionId: String) -> Unit)? = null
     var onStreamStart: ((rtpPort: Int) -> Unit)? = null
@@ -51,30 +34,27 @@ class WfdSessionHandler(
         private const val MAX_RTSP_BODY_BYTES = 1024 * 1024
 
         /**
-         * 本机作为 Sink 声明的能力集。字段依次为：
-         * native / preferred-display-mode / profile / level / CEA / VESA / HH /
-         * latency / min-slice-size / slice-enc-params / frame-rate-control / max-hres / max-vres
+         * H.264 Sink capability.
          *
-         * CEA 位图只声明三档，Windows 实测会挑其中最高的一档：
-         * ```
-         * bit 8 (0x100) = 1920x1080p60   ← 目标：帧间隔 16ms
-         * bit 7 (0x080) = 1920x1080p30      链路撑不住时的退路
-         * bit 6 (0x040) = 1280x720p60       再退一档
-         * ```
-         * 之前用的 0x0001DEFF 看着覆盖很广，但**恰好没有 bit 8**，所以 Windows 只能选到
-         * 1080p30，帧间隔 33ms —— 而视频 PES 不定长，必须等下一帧首包才知道当前帧结束，
-         * 这个等待直接等于帧间隔，是延迟的大头。
-         *
-         * level 同步提到 0x10（H.264 Level 4.2）：1080p60 超出了 Level 4.0 的上限。
+         * Profile bitmap 0x03 advertises mandatory CBP plus CHP. CEA bit 0 is the mandatory
+         * 640x480p60 interoperability baseline; bits 6/7/8 retain 720p60/1080p30/1080p60.
          */
         private const val VIDEO_FORMATS =
-            "00 00 02 10 000001C0 00000000 00000000 00 0000 0000 00 none none"
-        private const val AUDIO_CODECS = "AAC 00000001 00"
+            "00 00 03 10 000001C1 00000000 00000000 00 0000 0000 00 none none"
+
+        /**
+         * Every audio-capable WFD device must support 2ch 48 kHz 16-bit LPCM (LPCM mode bit 1).
+         * AAC-LC stereo remains advertised as an optional preferred compressed format.
+         */
+        private const val AUDIO_CODECS = "LPCM 00000002 00, AAC 00000001 00"
     }
 
     fun handleSession() {
         try {
-            Timber.i("WFD session started with source ${socket.inetAddress.hostAddress}")
+            Timber.i(
+                "WFD RTSP session started with source ${socket.inetAddress.hostAddress}:${socket.port} " +
+                    "RTP=$rtpPort"
+            )
             while (!socket.isClosed) {
                 val msg = readMessage() ?: break
                 if (msg.startsWith("RTSP/1.0")) handleResponse(msg) else handleRequest(msg)
@@ -139,15 +119,18 @@ class WfdSessionHandler(
         when (method) {
             "OPTIONS" -> {
                 sendOk(cseq, "Public: org.wfa.wfd1.0, GET_PARAMETER, SET_PARAMETER\r\n")
-                sendOptions()
+                if (!optionsSent) {
+                    optionsSent = true
+                    sendOptions()
+                }
             }
             "GET_PARAMETER" -> {
-                if (msg.contains("wfd_")) sendCapabilities(cseq) else sendOk(cseq)
+                if (msg.contains("wfd_", ignoreCase = true)) sendCapabilities(cseq) else sendOk(cseq)
             }
             "SET_PARAMETER" -> {
                 param(msg, "wfd_presentation_URL")
                     ?.substringBefore(' ')
-                    ?.takeIf { it.startsWith("rtsp://") }
+                    ?.takeIf { it.startsWith("rtsp://", ignoreCase = true) }
                     ?.let {
                         presentationUrl = it
                         Timber.i("WFD: presentation URL = $it")
@@ -161,6 +144,7 @@ class WfdSessionHandler(
                         0x080L -> "1920x1080p30"
                         0x040L -> "1280x720p60"
                         0x020L -> "1280x720p30"
+                        0x001L -> "640x480p60"
                         else -> "CEA 0x%08X".format(ceaBit)
                     }
                     Timber.i("WFD: negotiated mode = $mode")
@@ -168,9 +152,10 @@ class WfdSessionHandler(
                 param(msg, "wfd_audio_codecs")?.let {
                     Timber.i("WFD: source selected audio codec = $it")
                 }
+
                 sendOk(cseq)
-                if (msg.contains("wfd_trigger_method: SETUP")) sendSetup()
-                if (msg.contains("wfd_trigger_method: TEARDOWN")) close()
+                if (msg.contains("wfd_trigger_method: SETUP", ignoreCase = true)) sendSetup()
+                if (msg.contains("wfd_trigger_method: TEARDOWN", ignoreCase = true)) close()
             }
             "TEARDOWN" -> {
                 sendOk(cseq)
@@ -180,43 +165,71 @@ class WfdSessionHandler(
         }
     }
 
+    /**
+     * Match replies by CSeq. The old implementation treated any response arriving while PLAY was
+     * pending as the PLAY acknowledgement. Android sources may reorder/delay the M2 OPTIONS reply,
+     * which could start RTP/player state before M7 actually succeeded.
+     */
     private fun handleResponse(msg: String) {
-        val session = header(msg, "Session")?.substringBefore(';')
-        if (!session.isNullOrBlank() && sessionId.isEmpty()) {
-            sessionId = session
-            Timber.i("WFD: session id = $sessionId")
-            onSessionEstablished?.invoke(sessionId)
-            sendPlay()
-        } else if (playRequested) {
-            Timber.i("WFD: PLAY acknowledged, RTP should start on $rtpPort")
-            onStreamStart?.invoke(rtpPort)
-            startPlayerActivity()
-            playRequested = false
+        val status = Regex("^RTSP/1\\.0\\s+(\\d+)")
+            .find(msg)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
+        val cseq = header(msg, "CSeq")?.toIntOrNull() ?: -1
+        if (status !in 200..299) {
+            Timber.w("WFD: RTSP response failed status=$status cseq=$cseq")
+            if (cseq == setupCseq || cseq == playCseq) close()
+            return
+        }
+
+        when (cseq) {
+            setupCseq -> {
+                val session = header(msg, "Session")?.substringBefore(';')
+                if (session.isNullOrBlank()) {
+                    Timber.w("WFD: SETUP response missing Session header")
+                    close()
+                    return
+                }
+                sessionId = session
+                val transport = header(msg, "Transport")
+                Timber.i("WFD: SETUP accepted session=$sessionId transport=${transport ?: "unknown"}")
+                onSessionEstablished?.invoke(sessionId)
+                sendPlay()
+            }
+            playCseq -> {
+                Timber.i("WFD: PLAY acknowledged, RTP should start on $rtpPort")
+                onStreamStart?.invoke(rtpPort)
+                startPlayerActivity()
+                playCseq = -1
+            }
+            else -> Timber.d("WFD: RTSP response acknowledged cseq=$cseq")
         }
     }
 
-    private fun sendOptions() = send(
-        "OPTIONS * RTSP/1.0\r\n" +
-            "CSeq: ${++outCseq}\r\n" +
-            "Require: org.wfa.wfd1.0\r\n\r\n"
-    )
+    private fun sendOptions() {
+        val cseq = ++outCseq
+        send(
+            "OPTIONS * RTSP/1.0\r\n" +
+                "CSeq: $cseq\r\n" +
+                "Require: org.wfa.wfd1.0\r\n\r\n"
+        )
+    }
 
     private fun sendSetup() {
         if (presentationUrl.isEmpty()) {
             presentationUrl = "rtsp://${socket.inetAddress.hostAddress}/wfd1.0/streamid=0"
         }
+        setupCseq = ++outCseq
         send(
             "SETUP $presentationUrl RTSP/1.0\r\n" +
-                "CSeq: ${++outCseq}\r\n" +
+                "CSeq: $setupCseq\r\n" +
                 "Transport: RTP/AVP/UDP;unicast;client_port=$rtpPort\r\n\r\n"
         )
     }
 
     private fun sendPlay() {
-        playRequested = true
+        playCseq = ++outCseq
         send(
             "PLAY $presentationUrl RTSP/1.0\r\n" +
-                "CSeq: ${++outCseq}\r\n" +
+                "CSeq: $playCseq\r\n" +
                 "Session: $sessionId\r\n\r\n"
         )
     }

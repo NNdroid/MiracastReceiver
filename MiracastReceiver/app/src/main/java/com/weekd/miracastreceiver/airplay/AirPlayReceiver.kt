@@ -1,4 +1,4 @@
-﻿package com.weekd.miracastreceiver.airplay
+package com.weekd.miracastreceiver.airplay
 
 import android.content.Context
 import android.view.Surface
@@ -7,6 +7,7 @@ import com.weekd.miracastreceiver.airplay.handshake.AudioStreamServer
 import com.weekd.miracastreceiver.airplay.handshake.BufferedAudioServer
 import com.weekd.miracastreceiver.airplay.handshake.MirrorStreamServer
 import com.weekd.miracastreceiver.util.Logger
+import com.weekd.miracastreceiver.utils.PortUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -417,7 +418,7 @@ class AirPlayReceiver(
         mirrorAesKey = aesKey
         mirrorEcdhSecret = ecdhSecret
         mirrorAesIv = aesIv
-        val event = ServerSocket(0)
+        val event = PortUtils.bindEphemeralServerSocket()
         eventSocket = event
         // Accept + drain the event connection. We don't act on events yet, but macOS expects
         // the advertised event port to be connectable, so keep it open and readable.

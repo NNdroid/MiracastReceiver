@@ -26,11 +26,12 @@ object AppSettings {
     private const val KEY_UPNP_PORT = "upnp_port"
     private const val KEY_WEB_UI_ENABLED = "web_ui_enabled"
     private const val KEY_WEB_UI_PORT = "web_ui_port"
+    private const val KEY_WEB_UI_LAST_BOUND_PORT = "web_ui_last_bound_port"
     private const val KEY_WEB_UI_AUTH_REQUIRED = "web_ui_auth_required"
     private const val KEY_WEB_UI_TOKEN = "web_ui_token"
 
     const val DEFAULT_UPNP_PORT = 8080
-    const val DEFAULT_WEB_UI_PORT = 8090
+    const val DEFAULT_WEB_UI_PORT = 18090
     const val DEFAULT_MIRROR_MAX_HEIGHT = 0 // 0 = auto / display maximum
 
     fun isAutoStartOnBoot(context: Context): Boolean =
@@ -112,6 +113,19 @@ object AppSettings {
 
     fun setWebUiPort(context: Context, port: Int) {
         prefs(context).edit().putInt(KEY_WEB_UI_PORT, sanitizePort(port, DEFAULT_WEB_UI_PORT)).apply()
+    }
+
+    /**
+     * Last successfully bound WebUI port. This is runtime affinity, not the configured preferred
+     * port. When the preferred port is occupied we try this value first on the next reconfigure so
+     * an already-open browser page can usually reconnect to the same fallback port.
+     */
+    fun getLastWebUiBoundPort(context: Context): Int =
+        prefs(context).getInt(KEY_WEB_UI_LAST_BOUND_PORT, 0).takeIf { it in 1024..65535 } ?: 0
+
+    fun setLastWebUiBoundPort(context: Context, port: Int) {
+        if (port !in 1024..65535) return
+        prefs(context).edit().putInt(KEY_WEB_UI_LAST_BOUND_PORT, port).apply()
     }
 
     fun isWebUiAuthRequired(context: Context): Boolean =

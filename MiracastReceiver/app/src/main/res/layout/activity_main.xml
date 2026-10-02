@@ -1,10 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  首页。原先用 RelativeLayout 把标题/内容/说明分别贴顶、居中、贴底，
-  字号又是为 4K 电视写死的大号，屏幕一小（或电视有 overscan）三块就会互相重叠。
-  改成 ScrollView + 纵向流式布局：内容从上到下顺序排列，永远不会重叠，
-  放不下时可以滚动。字号整体调小，手机和电视都能正常显示。
--->
+<!-- Android TV 10-foot UI: landscape-first, generous safe margins and D-pad focusable actions. -->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
@@ -17,152 +12,295 @@
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:gravity="center_horizontal"
         android:orientation="vertical"
-        android:paddingLeft="24dp"
-        android:paddingTop="24dp"
-        android:paddingRight="24dp"
-        android:paddingBottom="24dp">
+        android:paddingLeft="48dp"
+        android:paddingTop="36dp"
+        android:paddingRight="48dp"
+        android:paddingBottom="36dp">
 
-        <!-- 应用标题 -->
+        <!-- Header -->
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="@string/app_name"
             android:textColor="@color/text_primary"
-            android:textSize="28sp"
+            android:textSize="34sp"
             android:textStyle="bold" />
 
-        <View
-            android:layout_width="120dp"
-            android:layout_height="3dp"
-            android:layout_marginTop="10dp"
-            android:background="@color/accent" />
-
-        <!-- 设备名称 -->
         <TextView
-            android:id="@+id/tv_device_name"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:ellipsize="end"
-            android:gravity="center"
-            android:maxLines="2"
-            android:textColor="@color/text_primary"
-            android:textSize="20sp"
-            tools:text="智能电视" />
-
-        <!-- 设备 IP -->
-        <TextView
-            android:id="@+id/tv_device_ip"
-            android:layout_width="match_parent"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
-            android:gravity="center"
-            android:maxLines="1"
+            android:text="@string/tv_subtitle"
             android:textColor="@color/text_secondary"
-            android:textSize="15sp"
-            tools:text="设备 IP: 192.168.1.100" />
+            android:textSize="17sp" />
 
-        <!-- 连接码 -->
-        <LinearLayout
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:background="@color/background_card"
-            android:gravity="center"
-            android:orientation="vertical"
-            android:paddingLeft="24dp"
-            android:paddingTop="14dp"
-            android:paddingRight="24dp"
-            android:paddingBottom="14dp">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="连接码"
-                android:textColor="@color/text_secondary"
-                android:textSize="14sp" />
-
-            <TextView
-                android:id="@+id/tv_connection_code"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:letterSpacing="0.15"
-                android:textColor="@color/accent"
-                android:textSize="30sp"
-                android:textStyle="bold"
-                tools:text="ABC123" />
-        </LinearLayout>
-
-        <!-- 状态 -->
-        <TextView
-            android:id="@+id/tv_status"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="18dp"
-            android:gravity="center"
-            android:text="@string/waiting_connection"
-            android:textColor="@color/text_secondary"
-            android:textSize="15sp" />
-
-        <ProgressBar
-            android:layout_width="28dp"
-            android:layout_height="28dp"
-            android:layout_marginTop="10dp"
-            android:indeterminate="true"
-            android:indeterminateTint="@color/accent" />
-
-        <!-- 设置：开机自启 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:addStatesFromChildren="true"
-            android:background="@drawable/bg_setting_item"
-            android:orientation="vertical"
-            android:padding="14dp">
+            android:layout_marginTop="26dp"
+            android:baselineAligned="false"
+            android:orientation="horizontal">
 
-            <androidx.appcompat.widget.SwitchCompat
-                android:id="@+id/switch_auto_start"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:focusable="true"
-                android:focusableInTouchMode="false"
-                android:text="@string/auto_start_on_boot"
-                android:textColor="@color/text_primary"
-                android:textSize="16sp" />
+            <!-- Left: receiver identity/status -->
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_marginRight="14dp"
+                android:layout_weight="1.15"
+                android:background="@drawable/bg_tv_panel"
+                android:orientation="vertical"
+                android:padding="28dp">
 
-            <TextView
-                android:layout_width="match_parent"
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/receiver_status"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="18dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="●"
+                        android:textColor="@color/success"
+                        android:textSize="20sp" />
+
+                    <TextView
+                        android:id="@+id/tv_status"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginLeft="10dp"
+                        android:text="@string/waiting_connection"
+                        android:textColor="@color/text_primary"
+                        android:textSize="24sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/tv_device_name"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="26dp"
+                    android:ellipsize="end"
+                    android:maxLines="2"
+                    android:textColor="@color/text_primary"
+                    android:textSize="30sp"
+                    android:textStyle="bold"
+                    tools:text="客厅 Android TV" />
+
+                <TextView
+                    android:id="@+id/tv_device_ip"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="17sp"
+                    tools:text="设备 IP: 192.168.1.100" />
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:layout_marginTop="24dp"
+                    android:background="@color/divider" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="20dp"
+                    android:text="@string/connection_code_label"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="15sp" />
+
+                <TextView
+                    android:id="@+id/tv_connection_code"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:letterSpacing="0.18"
+                    android:textColor="@color/accent"
+                    android:textSize="40sp"
+                    android:textStyle="bold"
+                    tools:text="ABC123" />
+
+                <ProgressBar
+                    android:layout_width="32dp"
+                    android:layout_height="32dp"
+                    android:layout_marginTop="22dp"
+                    android:indeterminate="true"
+                    android:indeterminateTint="@color/accent" />
+            </LinearLayout>
+
+            <!-- Right: privileged/background controls -->
+            <LinearLayout
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:lineSpacingExtra="2dp"
-                android:text="@string/auto_start_on_boot_hint"
-                android:textColor="@color/text_secondary"
-                android:textSize="12sp" />
+                android:layout_marginLeft="14dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_tv_panel"
+                    android:orientation="vertical"
+                    android:padding="24dp">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/privileged_status"
+                        android:textColor="@color/text_primary"
+                        android:textSize="21sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/tv_root_status"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="16dp"
+                        android:text="@string/root_status_checking"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="16sp" />
+
+                    <TextView
+                        android:id="@+id/tv_shizuku_status"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="9dp"
+                        android:text="@string/shizuku_status_checking"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="16sp" />
+
+                    <TextView
+                        android:id="@+id/tv_overlay_status"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="9dp"
+                        android:text="@string/overlay_status_checking"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="16sp" />
+
+                    <TextView
+                        android:id="@+id/tv_boot_status"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="9dp"
+                        android:text="@string/boot_status_checking"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="16sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="14dp"
+                    android:addStatesFromChildren="true"
+                    android:background="@drawable/bg_setting_item"
+                    android:orientation="vertical"
+                    android:padding="18dp">
+
+                    <androidx.appcompat.widget.SwitchCompat
+                        android:id="@+id/switch_auto_start"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:focusable="true"
+                        android:focusableInTouchMode="false"
+                        android:minHeight="54dp"
+                        android:nextFocusDown="@id/btn_optimize_background"
+                        android:text="@string/auto_start_on_boot"
+                        android:textColor="@color/text_primary"
+                        android:textSize="18sp" />
+
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="5dp"
+                        android:lineSpacingExtra="2dp"
+                        android:text="@string/auto_start_on_boot_hint"
+                        android:textColor="@color/text_muted"
+                        android:textSize="13sp" />
+                </LinearLayout>
+
+                <Button
+                    android:id="@+id/btn_optimize_background"
+                    android:layout_width="match_parent"
+                    android:layout_height="64dp"
+                    android:layout_marginTop="14dp"
+                    android:background="@drawable/bg_tv_action"
+                    android:focusable="true"
+                    android:nextFocusDown="@id/btn_restart_receiver"
+                    android:nextFocusUp="@id/switch_auto_start"
+                    android:text="@string/optimize_background"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_primary"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <Button
+                    android:id="@+id/btn_restart_receiver"
+                    android:layout_width="match_parent"
+                    android:layout_height="64dp"
+                    android:layout_marginTop="12dp"
+                    android:background="@drawable/bg_tv_action"
+                    android:focusable="true"
+                    android:nextFocusUp="@id/btn_optimize_background"
+                    android:text="@string/restart_receiver"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_primary"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
         </LinearLayout>
 
-        <!-- 连接说明 -->
-        <TextView
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="22dp"
-            android:text="@string/how_to_connect"
-            android:textColor="@color/text_secondary"
-            android:textSize="15sp"
-            android:textStyle="bold" />
+            android:background="@drawable/bg_tv_panel"
+            android:orientation="horizontal"
+            android:padding="22dp">
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:gravity="center"
-            android:lineSpacingExtra="3dp"
-            android:text="@string/connect_instruction"
-            android:textColor="@color/text_secondary"
-            android:textSize="13sp" />
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/how_to_connect"
+                    android:textColor="@color/text_primary"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:lineSpacingExtra="4dp"
+                    android:text="@string/connect_instruction"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="14sp" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="bottom"
+                android:layout_marginLeft="28dp"
+                android:text="@string/remote_hint"
+                android:textColor="@color/text_muted"
+                android:textSize="13sp" />
+        </LinearLayout>
     </LinearLayout>
-
 </ScrollView>

@@ -1,29 +1,34 @@
 package com.weekd.miracastreceiver.util
 
 import android.content.Context
+import com.weekd.miracastreceiver.utils.NetworkUtils
 
-/**
- * 应用设置（用户可在主界面里改的开关）。
- *
- * 单独放在 SharedPreferences 里，和 AirPlay 配对信息、设备 UUID 那几个
- * 内部用的 prefs 文件分开，避免清配对时误删用户设置。
- */
+/** Application settings shared by the TV UI and the always-on receiver service. */
 object AppSettings {
 
     private const val PREFS_NAME = "miracast_settings"
     private const val KEY_AUTO_START_ON_BOOT = "auto_start_on_boot"
+    private const val KEY_CONNECTION_CODE = "connection_code"
 
-    /**
-     * 是否开机自动启动接收服务。
-     *
-     * 默认开启：这个应用装在电视上就是当常驻投屏接收器用的，
-     * 每次重启电视都要手动打开一次不符合使用场景。
-     */
     fun isAutoStartOnBoot(context: Context): Boolean =
         prefs(context).getBoolean(KEY_AUTO_START_ON_BOOT, true)
 
     fun setAutoStartOnBoot(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUTO_START_ON_BOOT, enabled).apply()
+    }
+
+    /**
+     * Keep the connection code stable while the app/UI restarts so the background mDNS record and
+     * the Android TV status page always advertise the same value.
+     */
+    fun getOrCreateConnectionCode(context: Context): String {
+        val preferences = prefs(context)
+        val existing = preferences.getString(KEY_CONNECTION_CODE, null)
+        if (!existing.isNullOrBlank()) return existing
+
+        val generated = NetworkUtils.generateConnectionCode()
+        preferences.edit().putString(KEY_CONNECTION_CODE, generated).apply()
+        return generated
     }
 
     private fun prefs(context: Context) =

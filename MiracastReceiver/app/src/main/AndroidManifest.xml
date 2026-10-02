@@ -2,6 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Keep Android 5.x support while packaging Shizuku 13.1.5. The Shizuku provider and all
+         Shizuku API calls are disabled below API 24, matching the library's actual minSdk. -->
+    <uses-sdk tools:overrideLibrary="rikka.shizuku.provider,rikka.shizuku.api,rikka.shizuku.shared,rikka.shizuku.aidl" />
+
     <!-- 网络权限 -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -50,6 +54,15 @@
         android:theme="@style/Theme.Leanback"
         android:usesCleartextTraffic="true"
         tools:targetApi="31">
+
+        <!-- Shizuku binder receiver. Enabled only on API 24+ by the versioned bool resource. -->
+        <provider
+            android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:enabled="@bool/shizuku_provider_enabled"
+            android:exported="true"
+            android:multiprocess="false"
+            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
         <!-- 主 Activity - TV Launcher 入口 -->
         <activity

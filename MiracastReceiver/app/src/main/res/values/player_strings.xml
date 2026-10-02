@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="player_image_description">Cast image</string>
+    <string name="player_remote_hint">D-pad: choose controls · Left/Right: seek · INFO/MENU: video information</string>
+    <string name="player_previous">Previous</string>
+    <string name="player_rewind">Rewind</string>
+    <string name="player_play_pause">Play / pause</string>
+    <string name="player_fast_forward">Fast forward</string>
+    <string name="player_next">Next</string>
+    <string name="player_more">More</string>
+</resources>

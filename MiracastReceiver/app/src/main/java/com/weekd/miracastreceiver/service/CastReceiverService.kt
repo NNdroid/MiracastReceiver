@@ -21,12 +21,14 @@ import androidx.core.content.ContextCompat
 import com.weekd.miracastreceiver.R
 import com.weekd.miracastreceiver.airplay.AirPlayReceiver
 import com.weekd.miracastreceiver.discovery.DeviceInfoProvider
+import com.weekd.miracastreceiver.discovery.MdnsAdvertiser
 import com.weekd.miracastreceiver.dlna.DlnaMediaRenderer
 import com.weekd.miracastreceiver.dlna.SsdpServer
 import com.weekd.miracastreceiver.dlna.UpnpHttpServer
 import com.weekd.miracastreceiver.miracast.WfdRootHelper
 import com.weekd.miracastreceiver.miracast.WfdServer
 import com.weekd.miracastreceiver.miracast.WifiDirectManager
+import com.weekd.miracastreceiver.util.AppSettings
 import com.weekd.miracastreceiver.utils.NetworkUtils
 import timber.log.Timber
 import java.util.UUID
@@ -54,12 +56,14 @@ class CastReceiverService : Service() {
     }
 
     private lateinit var airPlayReceiver: AirPlayReceiver
+    private lateinit var customMdnsAdvertiser: MdnsAdvertiser
     private lateinit var dlnaRenderer: DlnaMediaRenderer
     private lateinit var ssdpServer: SsdpServer
     private lateinit var upnpHttpServer: UpnpHttpServer
     private lateinit var wfdServer: WfdServer
     private lateinit var wifiDirectManager: WifiDirectManager
     private lateinit var deviceUuid: String
+    private lateinit var connectionCode: String
     private var airPlayPlayerStarted = false
 
     private var initialized = false
@@ -99,6 +103,8 @@ class CastReceiverService : Service() {
         initialized = true
 
         deviceUuid = generateDeviceUuid()
+        connectionCode = AppSettings.getOrCreateConnectionCode(this)
+        customMdnsAdvertiser = MdnsAdvertiser(this)
 
         val mirrorResolution = getBestDisplayResolution()
         val deviceName = DeviceInfoProvider(this).getDeviceName()
@@ -360,6 +366,14 @@ class CastReceiverService : Service() {
 
         try {
             airPlayReceiver.start()
+
+            val deviceInfoProvider = DeviceInfoProvider(this)
+            customMdnsAdvertiser.startAdvertising(
+                serviceName = deviceInfoProvider.getDeviceName(),
+                port = 8080,
+                deviceInfo = deviceInfoProvider.getDeviceInfo() + ("code" to connectionCode)
+            )
+
             upnpHttpServer.start()
             ssdpServer.start()
 
@@ -372,10 +386,15 @@ class CastReceiverService : Service() {
             }
             wfdServer.start()
 
-            Timber.i("All cast services started (AirPlay + DLNA + Miracast/WFD)")
+            Timber.i("All cast services started (AirPlay + DLNA + Miracast/WFD + custom mDNS)")
         } catch (e: Exception) {
             servicesStarted = false
             Timber.e(e, "Failed to start one or more cast services")
+            runCatching { customMdnsAdvertiser.stopAdvertising() }
+            runCatching { airPlayReceiver.stop() }
+            runCatching { ssdpServer.stop() }
+            runCatching { upnpHttpServer.stop() }
+            shutdownMiracast()
             throw e
         }
     }
@@ -402,6 +421,8 @@ class CastReceiverService : Service() {
                 Timber.e(e, "Error unregistering playerStateReceiver")
             }
 
+            runCatching { customMdnsAdvertiser.stopAdvertising() }
+                .onFailure { Timber.w(it, "Error stopping custom mDNS advertiser") }
             runCatching { airPlayReceiver.stop() }
                 .onFailure { Timber.w(it, "Error stopping AirPlay receiver") }
             runCatching { ssdpServer.stop() }

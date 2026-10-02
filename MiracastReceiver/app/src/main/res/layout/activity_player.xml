@@ -71,12 +71,23 @@
                 android:textStyle="bold" />
 
             <TextView
+                android:id="@+id/tv_playback_meta"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:textColor="@color/player_text_secondary"
+                android:textSize="15sp"
+                tools:text="DLNA  •  1920×1080  •  H.264  •  23.98fps  •  8.4Mbps  •  ↓12.6MB/s  •  12:41 / 48:20" />
+
+            <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="7dp"
+                android:layout_marginTop="5dp"
                 android:text="@string/player_remote_hint"
                 android:textColor="@color/player_text_secondary"
-                android:textSize="14sp" />
+                android:textSize="13sp" />
         </LinearLayout>
 
         <TextView
@@ -105,13 +116,13 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_gravity="top|end"
-        android:layout_marginTop="116dp"
+        android:layout_marginTop="140dp"
         android:layout_marginEnd="56dp"
         android:background="@drawable/bg_stream_info"
         android:elevation="10dp"
         android:fontFamily="monospace"
         android:lineSpacingExtra="5dp"
-        android:maxWidth="460dp"
+        android:maxWidth="500dp"
         android:paddingLeft="22dp"
         android:paddingTop="18dp"
         android:paddingRight="22dp"

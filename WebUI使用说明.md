@@ -1,31 +1,61 @@
 # MiracastReceiver WebUI 使用说明
 
-MiracastReceiver 1.4.0 起内置局域网 WebUI。WebUI 与 AirPlay / DLNA / Miracast 一样由 `CastReceiverService` 托管，因此退出 Android TV 主界面后仍可使用。
+MiracastReceiver 1.5.0 起内置新版局域网 WebUI。WebUI 与 AirPlay / DLNA / Miracast 一样由 `CastReceiverService` 托管，因此退出 Android TV 主界面后仍可使用。
 
 ## 访问方式
 
 默认配置：
 
 - WebUI：开启
-- 端口：`8090`
+- 默认端口：`18090`
 - API Token 验证：开启
+- 端口自动回退：开启
 
-电视主界面会直接显示当前 WebUI 地址和 Token，例如：
+电视主界面会直接显示当前 **实际 WebUI 地址**、Token 和扫码二维码，例如：
 
 ```text
-http://192.168.1.100:8090
+http://192.168.1.100:18090
 Token: 0123456789abcdef...
 ```
 
-在同一可信局域网的电脑或手机浏览器打开该地址，然后输入电视上显示的 Token。
+最推荐的方式是直接使用手机扫描电视首页二维码。二维码已经包含当前实际监听端口和 Token，浏览器会自动完成鉴权，无需手动输入长 Token。
 
-> WebUI 当前使用 HTTP，Token 在局域网链路上不是 TLS 加密的。请只在可信 LAN、受控 VLAN 或 VPN 内使用，不要把 8090 直接端口转发到公网。
+二维码中的 Token 使用 URL Fragment：
+
+```text
+http://192.168.1.100:18090/#token=<token>
+```
+
+`#token=...` 不会作为 HTTP query 发送给 WebUI 服务器。网页读取 Token 后会保存到当前浏览器会话，并立即从地址栏清除 Fragment。
+
+如果手动输入 WebUI 地址，则仍可在登录页面输入电视上显示的 Token。
+
+> WebUI 当前使用 HTTP，Token 在局域网链路上不是 TLS 加密的。请只在可信 LAN、受控 VLAN 或 VPN 内使用，不要把 WebUI 端口直接转发到公网。
+
+## 端口自动回退
+
+WebUI 默认尝试监听 `18090`。
+
+如果该端口已被其他程序占用，服务会自动：
+
+1. 尝试复用上一次成功使用的备用端口；
+2. 如果仍不可用，在高位端口范围内随机选择一个可用端口；
+3. 将实际监听端口同步到电视首页、二维码、WebUI 状态和诊断页面。
+
+因此即使 `18090` 被占用，也不会导致整个投屏接收服务启动失败。
+
+在 WebUI 中手动修改端口时，如果指定端口已被占用，也会自动改用一个可用端口；保存成功后浏览器会跳转到最终实际端口。
+
+WebUI 与 DLNA / UPnP 端口不能设置为相同端口，Miracast RTSP `7236` 也不会被选作自动备用端口。
 
 ## 功能
 
 ### 概览
 
+新版概览页提供：
+
 - Android / 设备型号 / IP
+- 当前 WebUI 实际端口和自动回退状态
 - 接收服务运行时长
 - AirPlay 状态和发送端
 - Miracast 会话、客户端和 RTP 端口
@@ -68,13 +98,14 @@ AirPlay / Miracast 实时镜像继续使用低延迟 `MediaCodec -> Surface` 路
 
 - 开关 WebUI
 - 修改 WebUI 端口
+- 查看当前实际监听端口
 - 开关 WebUI Token 验证
 - 开机自动启动
 - 执行 Magisk Root / Shizuku 后台优化
 - 轮换 WebUI Token
 - 手动重载接收服务
 
-WebUI 与 DLNA / UPnP 端口不能设置成相同端口。
+轮换 Token 后电视首页二维码会自动更新。
 
 ### 诊断
 
@@ -85,7 +116,8 @@ WebUI 与 DLNA / UPnP 端口不能设置成相同端口。
 - H.264 / H.265 解码能力
 - 推荐解码参数
 - 当前实际解码器及硬件解码状态
-- WebUI / UPnP / Miracast 端口
+- WebUI 实际端口 / 首选端口
+- UPnP / Miracast 端口
 
 ### 日志
 
@@ -111,7 +143,7 @@ X-API-Token: <token>
 Authorization: Bearer <token>
 ```
 
-Token 使用随机数生成并持久化保存，可从电视 UI 查看，也可以在 WebUI 中轮换。
+Token 使用安全随机数生成并持久化保存，可从电视 UI 查看，也可以在 WebUI 中轮换。
 
 ## 主要 API
 
@@ -149,17 +181,12 @@ POST /api/actions/background-optimize
 {"action":"speed","value":1.25}
 ```
 
-## 端口修改注意事项
-
-如果在 WebUI 中修改 WebUI 自己的端口，保存后页面会自动跳转到新端口。
-
-如果在 WebUI 中关闭 WebUI，当前请求完成后管理服务器会停止；需要在电视主界面重新打开 WebUI 开关才能再次访问。
-
 ## 安全限制
 
-WebUI HTTP 服务做了以下限制：
+WebUI HTTP 服务包含以下限制：
 
 - 默认 Token 鉴权
+- 扫码 Token 使用 URL Fragment，不作为 query 发送
 - 请求行长度限制
 - 单行/总 Header 长度限制
 - 请求体最大 256 KiB
@@ -167,6 +194,6 @@ WebUI HTTP 服务做了以下限制：
 - `Cache-Control: no-store`
 - `X-Content-Type-Options: nosniff`
 - `X-Frame-Options: DENY`
-- 不在静态 HTML/JS 中嵌入 Token
+- 不在静态 HTML / JS 中嵌入 Token
 
 不建议关闭 Token 验证；关闭后同一网络中的其他设备也可能调用管理 API。

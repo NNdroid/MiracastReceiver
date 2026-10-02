@@ -2,6 +2,7 @@ package com.weekd.miracastreceiver.miracast
 
 import android.content.Context
 import android.content.Intent
+import com.weekd.miracastreceiver.util.AppSettings
 import timber.log.Timber
 import java.io.InputStream
 import java.io.OutputStream
@@ -36,16 +37,19 @@ class WfdSessionHandler(
     private val input: InputStream = socket.getInputStream()
     private val output: OutputStream = socket.getOutputStream()
 
-    private var outCseq = 0                  // 我们主动发起的请求用的 CSeq
+    private var outCseq = 0
     private var sessionId = ""
     private var presentationUrl = ""
     private var playRequested = false
+    private var streamStopNotified = false
 
     var onSessionEstablished: ((sessionId: String) -> Unit)? = null
     var onStreamStart: ((rtpPort: Int) -> Unit)? = null
     var onStreamStop: (() -> Unit)? = null
 
     companion object {
+        private const val MAX_RTSP_BODY_BYTES = 1024 * 1024
+
         /**
          * 本机作为 Sink 声明的能力集。字段依次为：
          * native / preferred-display-mode / profile / level / CEA / VESA / HH /
@@ -79,17 +83,15 @@ class WfdSessionHandler(
             Timber.e(e, "Error in WFD session")
         } finally {
             Timber.i("WFD session ended")
-            onStreamStop?.invoke()
+            notifyStreamStopOnce()
             close()
         }
     }
 
-    // ─── 读取一条完整 RTSP 消息（头部 + 按 Content-Length 读 body）────────────
     private fun readMessage(): String? {
         val buf = StringBuilder()
         val one = ByteArray(1)
 
-        // 读到头部结束
         while (!buf.endsWith("\r\n\r\n")) {
             val n = input.read(one)
             if (n <= 0) return null
@@ -100,9 +102,12 @@ class WfdSessionHandler(
             }
         }
 
-        // 按 Content-Length 读 body（不能用 readLine，长度不足会静默截断）
         val contentLength = Regex("(?i)Content-Length:\\s*(\\d+)")
             .find(buf)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        if (contentLength > MAX_RTSP_BODY_BYTES) {
+            Timber.w("WFD: RTSP body too large ($contentLength bytes), dropping session")
+            return null
+        }
         if (contentLength > 0) {
             val body = ByteArray(contentLength)
             var read = 0
@@ -127,7 +132,6 @@ class WfdSessionHandler(
         output.flush()
     }
 
-    // ─── 处理 Source 发来的请求 ──────────────────────────────────────────────
     private fun handleRequest(msg: String) {
         val method = msg.substringBefore(' ')
         val cseq = header(msg, "CSeq") ?: "0"
@@ -135,15 +139,12 @@ class WfdSessionHandler(
         when (method) {
             "OPTIONS" -> {
                 sendOk(cseq, "Public: org.wfa.wfd1.0, GET_PARAMETER, SET_PARAMETER\r\n")
-                sendOptions()                                    // M2
+                sendOptions()
             }
             "GET_PARAMETER" -> {
-                if (msg.contains("wfd_")) sendCapabilities(cseq)  // M3
-                else sendOk(cseq)                                 // keep-alive
+                if (msg.contains("wfd_")) sendCapabilities(cseq) else sendOk(cseq)
             }
             "SET_PARAMETER" -> {
-                // M4 里的 presentation URL 有两个值（"<url> none"），只能取第一个，
-                // 否则拼出的 SETUP 请求行会多一段，Source 判定畸形直接断链。
                 param(msg, "wfd_presentation_URL")
                     ?.substringBefore(' ')
                     ?.takeIf { it.startsWith("rtsp://") }
@@ -151,7 +152,7 @@ class WfdSessionHandler(
                         presentationUrl = it
                         Timber.i("WFD: presentation URL = $it")
                     }
-                // M4 里 Source 回选的格式，第 5 个字段就是它选中的 CEA 分辨率位
+
                 param(msg, "wfd_video_formats")?.let { selected ->
                     Timber.i("WFD: source selected video format = $selected")
                     val ceaBit = selected.split(' ').getOrNull(4)?.toLongOrNull(16) ?: 0L
@@ -168,26 +169,24 @@ class WfdSessionHandler(
                     Timber.i("WFD: source selected audio codec = $it")
                 }
                 sendOk(cseq)
-                if (msg.contains("wfd_trigger_method: SETUP")) sendSetup()      // M5 → M6
+                if (msg.contains("wfd_trigger_method: SETUP")) sendSetup()
                 if (msg.contains("wfd_trigger_method: TEARDOWN")) close()
             }
             "TEARDOWN" -> {
                 sendOk(cseq)
-                onStreamStop?.invoke()
                 close()
             }
             else -> sendOk(cseq)
         }
     }
 
-    // ─── 处理 Source 对我们请求的响应 ────────────────────────────────────────
     private fun handleResponse(msg: String) {
         val session = header(msg, "Session")?.substringBefore(';')
         if (!session.isNullOrBlank() && sessionId.isEmpty()) {
             sessionId = session
             Timber.i("WFD: session id = $sessionId")
             onSessionEstablished?.invoke(sessionId)
-            sendPlay()                                           // M7
+            sendPlay()
         } else if (playRequested) {
             Timber.i("WFD: PLAY acknowledged, RTP should start on $rtpPort")
             onStreamStart?.invoke(rtpPort)
@@ -196,7 +195,6 @@ class WfdSessionHandler(
         }
     }
 
-    // ─── 我们主动发起的请求 ──────────────────────────────────────────────────
     private fun sendOptions() = send(
         "OPTIONS * RTSP/1.0\r\n" +
             "CSeq: ${++outCseq}\r\n" +
@@ -223,20 +221,13 @@ class WfdSessionHandler(
         )
     }
 
-    // ─── 响应构造 ───────────────────────────────────────────────────────────
     private fun sendOk(cseq: String, extraHeaders: String = "") =
         send("RTSP/1.0 200 OK\r\nCSeq: $cseq\r\n$extraHeaders\r\n")
 
-    /**
-     * M3 能力响应：Source 问什么答什么，不认识的参数直接不答。
-     * 实测 Windows 会问 27 项（含 wfd2_* / intel_* / microsoft_* 私有扩展），
-     * 只回下面这几项标准参数它照样接受并推进到 M4。
-     */
     private fun sendCapabilities(cseq: String) {
         val body = buildString {
             append("wfd_video_formats: $VIDEO_FORMATS\r\n")
             append("wfd_audio_codecs: $AUDIO_CODECS\r\n")
-            // 关键：告诉 Source 往哪个 UDP 端口发 RTP，缺了这项收不到画面
             append("wfd_client_rtp_ports: RTP/AVP/UDP;unicast $rtpPort 0 mode=play\r\n")
             append("wfd_content_protection: none\r\n")
             append("wfd_display_edid: none\r\n")
@@ -253,7 +244,6 @@ class WfdSessionHandler(
         )
     }
 
-    // ─── 解析辅助 ───────────────────────────────────────────────────────────
     private fun header(msg: String, name: String): String? =
         Regex("(?i)^$name:\\s*(.+)$", RegexOption.MULTILINE)
             .find(msg)?.groupValues?.get(1)?.trim()
@@ -263,6 +253,10 @@ class WfdSessionHandler(
             .find(msg)?.groupValues?.get(1)?.trim()
 
     private fun startPlayerActivity() {
+        if (!AppSettings.isAutoLaunchPlayer(context)) {
+            Timber.i("WFD stream is active; auto-launch player is disabled")
+            return
+        }
         val intent = Intent(context, com.weekd.miracastreceiver.ui.PlayerActivity::class.java).apply {
             putExtra(com.weekd.miracastreceiver.ui.PlayerActivity.EXTRA_SOURCE_TYPE, "MIRACAST")
             putExtra(com.weekd.miracastreceiver.ui.PlayerActivity.EXTRA_RTP_PORT, rtpPort)
@@ -270,6 +264,12 @@ class WfdSessionHandler(
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
         context.startActivity(intent)
+    }
+
+    private fun notifyStreamStopOnce() {
+        if (streamStopNotified) return
+        streamStopNotified = true
+        onStreamStop?.invoke()
     }
 
     fun close() {

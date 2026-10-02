@@ -59,8 +59,10 @@ class MainActivity : AppCompatActivity() {
             currentDestination = restoredDestination()
             repairRestoredFragments(currentDestination)
             updateNavigationSelection()
-            navItems.firstOrNull { it.first == currentDestination }?.second?.post { view ->
-                if (!isFinishing && !isDestroyed) view.requestFocus()
+            navItems.firstOrNull { it.first == currentDestination }?.second?.let { navView ->
+                navView.post {
+                    if (!isFinishing && !isDestroyed) navView.requestFocus()
+                }
             }
         }
     }
@@ -176,8 +178,10 @@ class MainActivity : AppCompatActivity() {
             updateNavigationSelection()
 
             if (moveFocus) {
-                navItems.firstOrNull { it.first == destination }?.second?.post { view ->
-                    if (!isFinishing && !isDestroyed) view.requestFocus()
+                navItems.firstOrNull { it.first == destination }?.second?.let { navView ->
+                    navView.post {
+                        if (!isFinishing && !isDestroyed) navView.requestFocus()
+                    }
                 }
             }
         }.onFailure {

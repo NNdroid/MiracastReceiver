@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="nav_home">ホーム</string>
+    <string name="nav_player">プレーヤー</string>
+    <string name="nav_settings">設定</string>
+    <string name="nav_about">情報</string>
+    <string name="nav_remote_hint">方向キーでページを切り替えます</string>
+    <string name="home_subtitle">受信状態とクイックアクセスを1画面で確認</string>
+    <string name="home_protocol_status">受信プロトコル</string>
+    <string name="home_now_playing">再生中</string>
+    <string name="home_player_hint">プレーヤーで再生情報を確認するか、WebUI からリモート操作できます。</string>
+    <string name="home_enabled">有効</string>
+    <string name="home_disabled">無効</string>
+    <string name="home_playback_state">状態: %1$s</string>
+    <string name="settings_subtitle">受信機、起動、プロトコル、権限連携の設定</string>
+    <string name="player_hub_subtitle">現在の再生状態とリモート再生入口</string>
+    <string name="player_hub_state">状態: %1$s</string>
+    <string name="player_hub_nothing_playing">現在再生中のメディアはありません</string>
+    <string name="player_hub_source">ソース: %1$s</string>
+    <string name="player_hub_webui_hint">WebUI から HTTP、HLS、DASH URL を送信できます。</string>
+    <string name="player_hub_remote_title">リモート再生</string>
+    <string name="player_hub_remote_body">WebUI のプレーヤーページから URL の送信、再生操作、シーク、音量調整、状態確認ができます。</string>
+    <string name="about_subtitle">アプリ情報</string>
+    <string name="about_version">バージョン %1$s (%2$d)</string>
+    <string name="about_description">MiracastReceiver は Android TV 向けのキャスト受信アプリで、AirPlay、DLNA/UPnP、Miracast/WFD、HTTP 直接再生、LAN WebUI に対応します。</string>
+</resources>

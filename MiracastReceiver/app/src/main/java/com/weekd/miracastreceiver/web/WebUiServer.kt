@@ -56,12 +56,12 @@ class WebUiServer(
         serverSocket = socket
         RuntimeState.webUiPreferredPort = port
         RuntimeState.webUiPort = actualPort
-        AppSettings.setWebUiBoundPort(appContext, actualPort)
+        AppSettings.setWebUiLastBoundPort(appContext, actualPort)
 
         if (actualPort == port) {
-            Timber.i("WebUI started on 0.0.0.0:$actualPort")
+            Timber.i("WebUI started on preferred port 0.0.0.0:$actualPort")
         } else {
-            Timber.w("WebUI preferred port $port occupied; using 0.0.0.0:$actualPort")
+            Timber.w("WebUI preferred port $port occupied; using runtime fallback 0.0.0.0:$actualPort")
         }
 
         acceptJob = scope.launch {
@@ -146,6 +146,7 @@ class WebUiServer(
                             .put("ok", true)
                             .put("authRequired", AppSettings.isWebUiAuthRequired(appContext))
                             .put("port", RuntimeState.webUiPort.takeIf { it > 0 } ?: AppSettings.getWebUiPort(appContext))
+                            .put("preferredPort", AppSettings.getWebUiPort(appContext))
                     )
                     method == "GET" && path == "/api/status" -> sendJson(output, 200, buildStatus())
                     method == "GET" && path == "/api/config" -> sendJson(output, 200, buildConfig())
@@ -213,6 +214,9 @@ class WebUiServer(
         val requestedUpnpPort = if (json.has("upnpPort")) {
             json.optInt("upnpPort", AppSettings.DEFAULT_UPNP_PORT)
         } else AppSettings.getUpnpPort(appContext)
+        val requestedWebEnabled = if (json.has("webUiEnabled")) {
+            json.optBoolean("webUiEnabled", true)
+        } else AppSettings.isWebUiEnabled(appContext)
 
         if (requestedWebPort !in 1024..65535 || requestedUpnpPort !in 1024..65535) {
             return sendJson(output, 400, JSONObject().put("error", "port_out_of_range"))
@@ -220,6 +224,8 @@ class WebUiServer(
         if (requestedWebPort == requestedUpnpPort) {
             return sendJson(output, 400, JSONObject().put("error", "webui_and_upnp_ports_must_differ"))
         }
+
+        val reconnectPort = predictReconnectPort(requestedWebPort, requestedWebEnabled)
 
         if (json.has("airPlayEnabled")) AppSettings.setAirPlayEnabled(appContext, json.optBoolean("airPlayEnabled", true))
         if (json.has("dlnaEnabled")) AppSettings.setDlnaEnabled(appContext, json.optBoolean("dlnaEnabled", true))
@@ -229,7 +235,7 @@ class WebUiServer(
         if (json.has("autoLaunchPlayer")) AppSettings.setAutoLaunchPlayer(appContext, json.optBoolean("autoLaunchPlayer", true))
         if (json.has("mirrorMaxHeight")) AppSettings.setMirrorMaxHeight(appContext, json.optInt("mirrorMaxHeight", 0))
         if (json.has("upnpPort")) AppSettings.setUpnpPort(appContext, requestedUpnpPort)
-        if (json.has("webUiEnabled")) AppSettings.setWebUiEnabled(appContext, json.optBoolean("webUiEnabled", true))
+        if (json.has("webUiEnabled")) AppSettings.setWebUiEnabled(appContext, requestedWebEnabled)
         if (json.has("webUiPort")) AppSettings.setWebUiPort(appContext, requestedWebPort)
         if (json.has("webUiAuthRequired")) AppSettings.setWebUiAuthRequired(appContext, json.optBoolean("webUiAuthRequired", true))
         if (json.has("autoStartOnBoot")) {
@@ -242,8 +248,24 @@ class WebUiServer(
             AppSettings.setDeviceNameOverride(appContext, json.optString("deviceName", ""))
         }
 
-        sendJson(output, 200, JSONObject().put("ok", true).put("config", buildConfig()))
+        sendJson(
+            output,
+            200,
+            JSONObject()
+                .put("ok", true)
+                .put("config", buildConfig())
+                .put("reconnectPort", reconnectPort)
+        )
         onReconfigureRequested("WebUI configuration changed")
+    }
+
+    private fun predictReconnectPort(requestedPort: Int, enabled: Boolean): Int {
+        if (!enabled) return 0
+        val runtimePort = RuntimeState.webUiPort
+        if (requestedPort == runtimePort && runtimePort > 0) return runtimePort
+        if (PortUtils.isTcpPortAvailable(requestedPort)) return requestedPort
+        if (runtimePort > 0) return runtimePort
+        return AppSettings.getWebUiLastBoundPort(appContext) ?: requestedPort
     }
 
     private fun handlePlayerAction(output: OutputStream, body: String) {
@@ -275,7 +297,8 @@ class WebUiServer(
         val deviceInfo = DeviceInfoProvider(appContext)
         val privileged = PrivilegedAccess.getStatus(appContext)
         val now = System.currentTimeMillis()
-        val runtimePort = RuntimeState.webUiPort.takeIf { it > 0 } ?: AppSettings.getWebUiPort(appContext)
+        val preferredPort = AppSettings.getWebUiPort(appContext)
+        val runtimePort = RuntimeState.webUiPort.takeIf { it > 0 } ?: AppSettings.getWebUiLastBoundPort(appContext) ?: preferredPort
         return JSONObject()
             .put("app", JSONObject()
                 .put("version", BuildConfig.VERSION_NAME)
@@ -291,8 +314,8 @@ class WebUiServer(
                 .put("ip", NetworkUtils.getLocalIpAddress().orEmpty()))
             .put("webui", JSONObject()
                 .put("port", runtimePort)
-                .put("preferredPort", RuntimeState.webUiPreferredPort.takeIf { it > 0 } ?: AppSettings.getWebUiPort(appContext))
-                .put("fallback", RuntimeState.webUiPreferredPort > 0 && RuntimeState.webUiPreferredPort != runtimePort)
+                .put("preferredPort", preferredPort)
+                .put("fallback", runtimePort != preferredPort)
                 .put("authRequired", AppSettings.isWebUiAuthRequired(appContext)))
             .put("service", JSONObject()
                 .put("running", RuntimeState.serviceRunning)
@@ -327,7 +350,7 @@ class WebUiServer(
 
     private fun buildConfig(): JSONObject {
         val s = AppSettings.snapshot(appContext)
-        val runtimePort = RuntimeState.webUiPort.takeIf { it > 0 } ?: s.webUiPort
+        val runtimePort = RuntimeState.webUiPort.takeIf { it > 0 } ?: s.webUiLastBoundPort ?: s.webUiPort
         return JSONObject()
             .put("airPlayEnabled", s.airPlayEnabled)
             .put("dlnaEnabled", s.dlnaEnabled)
@@ -340,7 +363,7 @@ class WebUiServer(
             .put("webUiEnabled", s.webUiEnabled)
             .put("webUiPort", s.webUiPort)
             .put("webUiRuntimePort", runtimePort)
-            .put("webUiFallbackActive", RuntimeState.webUiPreferredPort > 0 && RuntimeState.webUiPreferredPort != runtimePort)
+            .put("webUiFallbackActive", runtimePort != s.webUiPort)
             .put("webUiAuthRequired", s.webUiAuthRequired)
             .put("autoStartOnBoot", s.autoStartOnBoot)
             .put("deviceName", s.deviceNameOverride.orEmpty())
@@ -349,7 +372,8 @@ class WebUiServer(
 
     private fun buildDiagnostics(): JSONObject {
         val recommended = CodecUtils.getRecommendedVideoConfig()
-        val runtimePort = RuntimeState.webUiPort.takeIf { it > 0 } ?: AppSettings.getWebUiPort(appContext)
+        val preferredPort = AppSettings.getWebUiPort(appContext)
+        val runtimePort = RuntimeState.webUiPort.takeIf { it > 0 } ?: AppSettings.getWebUiLastBoundPort(appContext) ?: preferredPort
         return JSONObject()
             .put("network", JSONObject()
                 .put("ip", NetworkUtils.getLocalIpAddress().orEmpty())
@@ -366,7 +390,8 @@ class WebUiServer(
                 .put("activeDecoderHardware", RuntimeState.decoderHardwareAccelerated()))
             .put("ports", JSONObject()
                 .put("webUi", runtimePort)
-                .put("webUiPreferred", RuntimeState.webUiPreferredPort.takeIf { it > 0 } ?: AppSettings.getWebUiPort(appContext))
+                .put("webUiPreferred", preferredPort)
+                .put("webUiFallback", runtimePort != preferredPort)
                 .put("upnp", AppSettings.getUpnpPort(appContext))
                 .put("miracastRtsp", MIRACAST_RTSP_PORT))
             .put("limits", JSONObject()

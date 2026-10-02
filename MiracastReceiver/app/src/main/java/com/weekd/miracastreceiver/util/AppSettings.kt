@@ -2,7 +2,6 @@ package com.weekd.miracastreceiver.util
 
 import android.content.Context
 import com.weekd.miracastreceiver.utils.NetworkUtils
-import com.weekd.miracastreceiver.utils.PortUtils
 import java.security.SecureRandom
 import java.util.UUID
 
@@ -109,29 +108,16 @@ object AppSettings {
         prefs(context).edit().putBoolean(KEY_WEB_UI_ENABLED, enabled).apply()
     }
 
-    /** Preferred/effective WebUI port. Occupied requested ports are replaced with a stable free port. */
+    /** User-configured preferred WebUI port. Runtime collision fallback is stored separately. */
     fun getWebUiPort(context: Context): Int =
         sanitizePort(prefs(context).getInt(KEY_WEB_UI_PORT, DEFAULT_WEB_UI_PORT), DEFAULT_WEB_UI_PORT)
 
     fun setWebUiPort(context: Context, port: Int) {
         val requested = sanitizePort(port, DEFAULT_WEB_UI_PORT)
-        val current = getWebUiLastBoundPort(context)
-        val selected = if (requested == current) {
-            requested
-        } else {
-            PortUtils.findAvailablePort(
-                preferredPort = requested,
-                fallbackPort = current,
-                excludedPorts = setOf(getUpnpPort(context), 7236)
-            )
-        }
-        prefs(context).edit()
-            .putInt(KEY_WEB_UI_PORT, selected)
-            .putInt(KEY_WEB_UI_LAST_BOUND_PORT, selected)
-            .apply()
+        prefs(context).edit().putInt(KEY_WEB_UI_PORT, requested).apply()
     }
 
-    /** Last port the WebUI successfully bound. Used to keep an automatically selected fallback stable. */
+    /** Last port the WebUI successfully bound; this never replaces the user's preferred port. */
     fun getWebUiLastBoundPort(context: Context): Int? {
         val port = prefs(context).getInt(KEY_WEB_UI_LAST_BOUND_PORT, 0)
         return port.takeIf { it in 1024..65535 }
@@ -143,13 +129,9 @@ object AppSettings {
         }
     }
 
-    /** Persist the actually bound runtime port after startup fallback selection. */
+    /** Compatibility helper: persist only the effective runtime port, not the preferred port. */
     fun setWebUiBoundPort(context: Context, port: Int) {
-        if (port !in 1024..65535) return
-        prefs(context).edit()
-            .putInt(KEY_WEB_UI_PORT, port)
-            .putInt(KEY_WEB_UI_LAST_BOUND_PORT, port)
-            .apply()
+        setWebUiLastBoundPort(context, port)
     }
 
     fun isWebUiAuthRequired(context: Context): Boolean =

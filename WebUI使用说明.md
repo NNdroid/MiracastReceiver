@@ -1,24 +1,24 @@
 # MiracastReceiver WebUI 使用说明
 
-MiracastReceiver 1.5.0 起内置新版局域网 WebUI。WebUI 与 AirPlay / DLNA / Miracast 一样由 `CastReceiverService` 托管，因此退出 Android TV 主界面后仍可使用。
+MiracastReceiver 1.5.x 内置新版局域网 WebUI。WebUI 与 AirPlay / DLNA / Miracast 一样由 `CastReceiverService` 托管，因此退出 Android TV 主界面后仍可使用。
 
 ## 访问方式
 
 默认配置：
 
 - WebUI：开启
-- 默认端口：`18090`
+- **首选端口**：`18090`
 - API Token 验证：开启
 - 端口自动回退：开启
 
-电视主界面会直接显示当前 **实际 WebUI 地址**、Token 和扫码二维码，例如：
+电视主界面会直接显示当前**实际 WebUI 地址**、首选/实际端口状态和扫码二维码，例如：
 
 ```text
 http://192.168.1.100:18090
-Token: 0123456789abcdef...
+实际 18090 · 使用首选端口
 ```
 
-最推荐的方式是直接使用手机扫描电视首页二维码。二维码已经包含当前实际监听端口和 Token，浏览器会自动完成鉴权，无需手动输入长 Token。
+最推荐的方式是直接使用手机扫描电视首页二维码。二维码已经包含当前实际监听端口和 Token，浏览器会自动完成鉴权，无需手动输入长 Token。电视界面只显示 Token 的缩略指纹，完整 Token 不再占用大屏空间。
 
 二维码中的 Token 使用 URL Fragment：
 
@@ -26,25 +26,32 @@ Token: 0123456789abcdef...
 http://192.168.1.100:18090/#token=<token>
 ```
 
-`#token=...` 不会作为 HTTP query 发送给 WebUI 服务器。网页读取 Token 后会保存到当前浏览器会话，并立即从地址栏清除 Fragment。
+`#token=...` 不会作为 HTTP query 发送给 WebUI 服务器。网页读取 Token 后会保存到当前浏览器会话，并立即从地址栏清除 Fragment。后续 API 仍通过 `X-API-Token` 请求头鉴权。
 
-如果手动输入 WebUI 地址，则仍可在登录页面输入电视上显示的 Token。
+如果手动输入 WebUI 地址，则仍可在登录页面输入 Token。
 
 > WebUI 当前使用 HTTP，Token 在局域网链路上不是 TLS 加密的。请只在可信 LAN、受控 VLAN 或 VPN 内使用，不要把 WebUI 端口直接转发到公网。
 
-## 端口自动回退
+## 首选端口与自动回退
 
-WebUI 默认尝试监听 `18090`。
+`18090` 是**首选端口**，不是一次冲突后就会被永久改写的端口。
 
-如果该端口已被其他程序占用，服务会自动：
+启动时 WebUI 会按顺序：
 
-1. 尝试复用上一次成功使用的备用端口；
-2. 如果仍不可用，在高位端口范围内随机选择一个可用端口；
-3. 将实际监听端口同步到电视首页、二维码、WebUI 状态和诊断页面。
+1. 尝试配置的首选端口（默认 `18090`）；
+2. 如果被占用，尝试上一次成功使用的备用端口；
+3. 如果仍不可用，在高位端口范围内随机选择一个可用端口；
+4. 将实际监听端口同步到电视首页、二维码、WebUI 状态和诊断页面。
 
-因此即使 `18090` 被占用，也不会导致整个投屏接收服务启动失败。
+例如首选端口仍为 `18090`，当前被其他程序占用而临时使用 `43721`，电视会显示：
 
-在 WebUI 中手动修改端口时，如果指定端口已被占用，也会自动改用一个可用端口；保存成功后浏览器会跳转到最终实际端口。
+```text
+实际 43721 · 首选 18090 被占用，已临时回退
+```
+
+自动回退只更新运行时/last-bound 端口，不会把 `web_ui_port` 首选配置永久改成随机端口。下一次接收服务启动仍会首先尝试首选端口。
+
+在 WebUI 中手动修改首选端口时，如果指定端口已被占用，本次运行会继续使用可用回退端口；浏览器会根据服务返回的实际重连端口跳转，并通过 `#token=` Fragment 带入当前认证，所以跨端口后无需再次手输 Token。
 
 WebUI 与 DLNA / UPnP 端口不能设置为相同端口，Miracast RTSP `7236` 也不会被选作自动备用端口。
 
@@ -55,7 +62,7 @@ WebUI 与 DLNA / UPnP 端口不能设置为相同端口，Miracast RTSP `7236` �
 新版概览页提供：
 
 - Android / 设备型号 / IP
-- 当前 WebUI 实际端口和自动回退状态
+- 当前 WebUI 实际端口、首选端口和自动回退状态
 - 接收服务运行时长
 - AirPlay 状态和发送端
 - Miracast 会话、客户端和 RTP 端口
@@ -97,8 +104,8 @@ AirPlay / Miracast 实时镜像继续使用低延迟 `MediaCodec -> Surface` 路
 ### 系统与后台
 
 - 开关 WebUI
-- 修改 WebUI 端口
-- 查看当前实际监听端口
+- 修改 WebUI 首选端口
+- 查看当前实际监听端口和自动回退状态
 - 开关 WebUI Token 验证
 - 开机自动启动
 - 执行 Magisk Root / Shizuku 后台优化
@@ -116,7 +123,7 @@ AirPlay / Miracast 实时镜像继续使用低延迟 `MediaCodec -> Surface` 路
 - H.264 / H.265 解码能力
 - 推荐解码参数
 - 当前实际解码器及硬件解码状态
-- WebUI 实际端口 / 首选端口
+- WebUI 实际端口 / 首选端口 / 回退状态
 - UPnP / Miracast 端口
 
 ### 日志
@@ -143,7 +150,7 @@ X-API-Token: <token>
 Authorization: Bearer <token>
 ```
 
-Token 使用安全随机数生成并持久化保存，可从电视 UI 查看，也可以在 WebUI 中轮换。
+Token 使用安全随机数生成并持久化保存，可通过电视二维码自动带入，也可以在 WebUI 中轮换。
 
 ## 主要 API
 

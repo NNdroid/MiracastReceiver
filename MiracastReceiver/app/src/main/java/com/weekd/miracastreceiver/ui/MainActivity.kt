@@ -19,7 +19,6 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.weekd.miracastreceiver.R
 import com.weekd.miracastreceiver.discovery.DeviceInfoProvider
-import com.weekd.miracastreceiver.discovery.MdnsAdvertiser
 import com.weekd.miracastreceiver.service.CastReceiverService
 import com.weekd.miracastreceiver.util.AppSettings
 import com.weekd.miracastreceiver.util.PrivilegedAccess
@@ -37,7 +36,6 @@ import timber.log.Timber
  */
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var mdnsAdvertiser: MdnsAdvertiser
     private lateinit var deviceInfoProvider: DeviceInfoProvider
 
     private lateinit var tvDeviceName: TextView
@@ -53,8 +51,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnRestartReceiver: Button
 
     private var connectionCode: String = ""
-
-    /** 定位权限弹窗还在时不叠加悬浮窗权限提示，等它有结果再说。 */
     private var wifiPermissionPending = false
     private var overlayPromptShown = false
     private var privilegedSetupAttempted = false
@@ -75,7 +71,6 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val REQUEST_CODE_PERMISSIONS = 1001
 
-        /** Wi-Fi Direct runtime permissions. */
         private val WIFI_DIRECT_PERMISSIONS: Array<String>
             get() = if (Build.VERSION.SDK_INT >= 33) {
                 arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
@@ -185,8 +180,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun initServices() {
         deviceInfoProvider = DeviceInfoProvider(this)
-        mdnsAdvertiser = MdnsAdvertiser(this)
-        connectionCode = NetworkUtils.generateConnectionCode()
+        connectionCode = AppSettings.getOrCreateConnectionCode(this)
     }
 
     private fun initViews() {
@@ -243,7 +237,6 @@ class MainActivity : AppCompatActivity() {
         tvDeviceIp.text = getString(R.string.device_ip, ipAddress ?: "获取中…")
         if (ipAddress != null) Timber.i("Local IP: $ipAddress")
 
-        startAdvertising()
         updateStatus()
     }
 
@@ -264,31 +257,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun startAdvertising() {
-        val deviceInfo = deviceInfoProvider.getDeviceInfo()
-        val deviceName = deviceInfoProvider.getDeviceName()
-
-        // AirPlay is advertised by CastReceiverService/AirPlayReceiver only. This separate record is
-        // retained for the project's custom Android sender discovery path.
-        mdnsAdvertiser.startAdvertising(
-            serviceName = deviceName,
-            port = 8080,
-            deviceInfo = deviceInfo + ("code" to connectionCode)
-        )
-
-        Timber.i("Started custom Miracast mDNS advertising: $deviceName")
-    }
-
     private fun updateStatus() {
         lifecycleScope.launch {
             while (true) {
                 val ip = NetworkUtils.getLocalIpAddress()
                 if (ip != null) tvDeviceIp.text = getString(R.string.device_ip, ip)
 
-                tvStatus.text = when {
-                    !NetworkUtils.isNetworkAvailable(this@MainActivity) -> "等待网络连接"
-                    mdnsAdvertiser.isAdvertising() -> getString(R.string.waiting_connection)
-                    else -> "接收服务运行中"
+                tvStatus.text = if (NetworkUtils.isNetworkAvailable(this@MainActivity)) {
+                    getString(R.string.waiting_connection)
+                } else {
+                    "等待网络连接"
                 }
                 delay(2000)
             }
@@ -415,7 +393,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         runCatching { Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener) }
-        mdnsAdvertiser.stopAdvertising()
         Timber.i("MainActivity destroyed; background cast receiver remains active")
         super.onDestroy()
     }

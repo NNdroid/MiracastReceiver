@@ -107,7 +107,8 @@ class MainActivity : AppCompatActivity() {
         updateNavigationSelection()
 
         if (moveFocus) {
-            navItems.first { it.first == destination }.second.post { it.requestFocus() }
+            val navView = navItems.first { it.first == destination }.second
+            navView.post { navView.requestFocus() }
         } else {
             supportFragmentManager.executePendingTransactions()
             (supportFragmentManager.findFragmentByTag(destination.name) as? TvPage)?.requestInitialFocus()

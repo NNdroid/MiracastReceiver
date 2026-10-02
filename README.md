@@ -1,390 +1,304 @@
-# Miracast Receiver for Android TV
+# MiracastReceiver
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Android](https://img.shields.io/badge/Android-5.0%2B-green.svg)](https://developer.android.com)
-[![GitHub release](https://img.shields.io/github/v/release/weekdayjast/MiracastReceiver)](https://github.com/weekdayjast/MiracastReceiver/releases)
+[![Android CI](https://github.com/NNdroid/MiracastReceiver/actions/workflows/android-ci.yml/badge.svg)](https://github.com/NNdroid/MiracastReceiver/actions/workflows/android-ci.yml)
+[![Android](https://img.shields.io/badge/Android-5.0%2B-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> 由于电视投屏广告日益猖獗，乐播投屏只允许本人快乐几分钟，本人深感震惊、愤怒、无奈，并在反复挣扎、彻夜难眠、认真思考三秒钟后，做出了一个违背祖宗的决定：
->
-> 自己开发一个投屏 APK。
->
-> 从此以后，我的电视我做主，我的投屏我掌控。
-> 拒绝广告绑架，拒绝几分钟体验卡，拒绝看个视频还要先学习理财、买车、装宽带。
->
-> 本项目将秉持“能用就行、能跑就好、不卡算赢”的核心理念，坚定走自主投屏、自研可控、自娱自乐的发展路线。
->
-> 谨以此 APK，献给所有被投屏广告折磨过的灵魂。
->
-> —— 一个被广告逼成开发者的人
+MiracastReceiver is an Android TV casting receiver designed for always-on use. It supports AirPlay, DLNA/UPnP, Miracast/Wi-Fi Display, direct HTTP media playback, a remote WebUI, background auto-start, Android TV remote navigation, and hardware-accelerated playback where supported by the device.
 
-一个功能强大的 Android TV 投屏接收端应用，支持多种投屏协议，让您的电视轻松接收来自手机、平板和电脑的投屏内容。
+The project is optimized for TV usage: it can keep the receiver service running after the UI is closed, exposes a 10-foot Android TV interface, provides a browser-based control center, and can use Root or Shizuku for additional background and Miracast-related integration on devices that need it.
 
-**已测试支持**：Bilibili、优酷、爱奇艺、Emby 等主流应用投屏
+## Highlights
 
-[English](#english) | [中文](#中文)
-
----
-
-## 中文
-
-### ✨ 功能特性
-
-- **🍎 AirPlay 支持**：完美支持 iPhone、iPad、Mac 投屏
-  - 屏幕镜像（FairPlay 解密 + H.264 硬解码）
-  - 视频投屏
-  - 音频流播放
-
-- **📺 DLNA/UPnP 支持**：兼容各平台 DLNA 客户端
-  - Bilibili、优酷、爱奇艺等视频 App
-  - Windows Media Player
-  - VLC Player
-  - Emby、Plex 等媒体服务器
-
-- **🖥️ Miracast/WFD**：Windows 无线显示器与安卓手机系统「投屏」共用的协议（**部分电视需要 root**，见[已知问题](#-已知问题)）
-  - 完整 RTSP 会话协商（M1–M7）
-  - MPEG-2 TS 解复用 + H.264 硬解码，直送 MediaCodec 低延迟渲染
-  - AAC / LPCM 音频解码，收到即播，与画面同步输出
-  - Wi-Fi Direct P2P + WFD IE 注入（Windows `Win+K`、安卓系统投屏均可直接发现）
-  - 端到端延迟约 60–130 ms，可作为 Windows 的无线第二屏幕
-  - 详见 [Windows 无线投屏 Root 配置说明](Windows无线投屏Root配置说明.md)
-
-- **🎬 强大的播放能力**
-  - 支持 HTTP/HTTPS 视频流
-  - 支持 HLS（.m3u8）直播流
-  - 支持多种视频格式（MP4、MKV、AVI 等）
-  - 支持图片幻灯片播放
-  - 倍速播放（0.5x - 2x）
-  - 画质选择（480p - 1080p）
-
-- **⚡ 开机自动启动**：电视开机后在后台自动拉起接收服务，无需手动打开应用
-  - 等局域网 IP 就绪后再启动 AirPlay/DLNA/Miracast，避免开机瞬间广播绑错地址
-  - 可在主界面的「开机自动启动接收服务」开关中关闭
-
-### 📱 支持的投屏来源
-
-| 平台 | 协议 | 状态 | 说明 |
-|------|------|------|------|
-| iPhone/iPad | AirPlay | ✅ 完美支持 | 屏幕镜像、视频、音频投屏 |
-| Android 手机 | DLNA | ✅ 完美支持 | Bilibili、优酷等 App |
-| Android 手机 | Miracast | ✅ 支持（部分需 root） | 系统自带「投屏」直接发现，整屏镜像含声音 |
-| Windows | DLNA | ✅ 完美支持 | 媒体播放器投屏 |
-| Windows | Miracast | ✅ 支持（部分需 root） | `Win+K` 直接发现，可当无线第二屏幕，含声音 |
-| Mac | AirPlay | ✅ 完美支持 | 系统原生支持 |
-| Emby/Plex | DLNA | ✅ 兼容 | 媒体服务器投屏 |
-
-### 🚀 快速开始
-
-#### 下载安装
-
-1. 前往 [Releases](https://github.com/weekdayjast/MiracastReceiver/releases) 下载最新版本 APK
-   - **ARM64 (推荐)**：适用于大多数现代 Android TV
-   - **ARM32**：适用于老旧设备
-
-2. 通过以下方式安装到 Android TV：
-   - U 盘安装：复制 APK 到 U 盘，插入电视，用文件管理器打开安装
-   - ADB 安装：`adb install app-release.apk`
-   - 远程 ADB：`adb connect <TV_IP>:5555 && adb install app-release.apk`
-
-#### 使用方法
-
-1. 在 Android TV 上启动 **Miracast Receiver** 应用
-2. 应用会显示设备名称、IP 地址和连接码
-3. 根据你的设备选择投屏方式：
-
-**iPhone/iPad 投屏**：
-- 打开控制中心 → 屏幕镜像 → 选择 "Sony BRAVIA 4K VH22"（或你的设备名）
-- 或在视频 App 中点击 AirPlay 图标
-
-**Android 手机投屏**：
-- 在支持 DLNA 的 App（如 Bilibili）中点击投屏按钮
-- 选择显示的设备名称
-- 或使用系统自带的「投屏 / 无线显示」整屏镜像（Miracast，部分电视需 root，见[已知问题](#-已知问题)）
-
-**Windows 投屏**：
-- 使用 VLC 或 Windows Media Player 的"播放到"功能
-- 或使用 Emby、Plex 等媒体服务器
-- 或按 `Win+K` 连接无线显示器（Miracast，部分电视需 root）
-
-### 🛠️ 从源码构建
-
-#### 环境要求
-
-- Android Studio 2026.1+
-- Android SDK API 36
-- JDK 17+
-- Gradle 8.11.1
-
-#### 构建步骤
-
-```bash
-# 克隆仓库
-git clone https://github.com/weekdayjast/MiracastReceiver.git
-cd MiracastReceiver
-
-# 构建 Debug APK
-cd MiracastReceiver
-./gradlew assembleDebug
-
-# 构建 Release APK（需要配置签名）
-./gradlew assembleRelease
-
-# 生成 64 位和 32 位 APK
-./gradlew assembleRelease -PbuildArm64=true
-./gradlew assembleRelease -PbuildArm32=true
-```
-
-生成的 APK 位于：`app/build/outputs/apk/`
-
-### 📖 文档
-
-- [开发与调试指南](开发与调试指南.md) - 完整的开发、打包、安装和调试说明
-- [Windows 无线投屏 Root 配置说明](Windows无线投屏Root配置说明.md) - Miracast 启用步骤、协议实现要点与排错
-- [Windows 无线显示器](Windows无线显示器支持说明.md) - Miracast 协议背景说明
-
-### 🔧 技术栈
-
-- **语言**：Kotlin
-- **最低 SDK**：Android 5.0 (API 21)
-- **目标 SDK**：Android 14 (API 36)
-- **UI 框架**：Android TV Leanback
-- **视频播放**：ExoPlayer (Media3)
-- **网络**：OkHttp, mDNS/NSD
-- **协议**：AirPlay, DLNA/UPnP, Miracast/WFD, RTSP, RTP
-
-### 🙏 致谢与参考
-
-- AirPlay 屏幕镜像实现借鉴并参考了 [PhairPlay](https://github.com/philippe44/PhairPlay) 项目的协议流程与实现思路。
-
-### 🐛 已知问题
-
-1. **Miracast（Windows 无线显示器 / 安卓系统投屏）在部分电视上需要 root**
-   - 电视要被 Windows `Win+K` 和安卓系统投屏发现，必须对外广播 WFD IE
-   - **系统自带「屏幕镜像」功能的电视（如 Sony BRAVIA）无需 root**：系统已经在广播 WFD IE，
-     本应用直接接管会话。可用 `adb shell settings get global wifi_display_on` 确认，返回 `1` 即属于此类
-   - 系统不带该功能的电视：广播 WFD IE 需要 signature 级权限 `CONFIGURE_WIFI_DISPLAY`，
-     普通应用拿不到，只能在 root 后由应用自动注入；未 root 则无法使用，请改用 DLNA 投屏
-   - 连接时电视上弹出「是否允许连接」的确认框是系统的 Wi-Fi Direct 授权流程，确认即可
-   - 详见 [Windows 无线投屏 Root 配置说明](Windows无线投屏Root配置说明.md)
-
-2. **Emby 投屏兼容性**
-   - 部分 Emby 客户端的 SOAP 请求格式可能需要特殊处理
-
-3. **Miracast 列表里显示的是 `Android_xxxx`，而不是电视名称**
-   - 安卓手机投屏和 Windows `Win+K` 列表里显示的是电视的 Wi-Fi Direct 设备名，由系统管理
-   - Android 11 起修改该名称需要 `NETWORK_SETTINGS` 等系统级权限，普通应用无法修改，
-     只能保持系统默认的 `Android_xxxx`
-   - 如果电视的「设置 → 网络」里有 Wi-Fi Direct 设置页，可以在那里改名；没有的话目前无法修改
-   - AirPlay / DLNA 不受影响，显示的是电视「设置 → 关于 → 设备名称」里的名字
-
-4. **需要「显示在其他应用上层」权限**
-   - Android 10 起系统禁止后台弹出界面。未打开本应用时（开机自启后、或退回桌面后）投屏，
-     播放页会被系统拦截，表现为投屏没有反应
-   - 首次打开应用时会弹窗引导到系统设置页开启；如果电视没有该设置页，可用 adb 开启：
-     `adb shell appops set com.weekd.miracastreceiver SYSTEM_ALERT_WINDOW allow`
-
-### 🗺️ 后续计划
-
-- **完善 AirPlay 支持**
-  - 优化屏幕镜像稳定性和延迟
-  - 优化音视频同步
-
-- **完善 Miracast 投屏（Windows / 安卓）**（音视频已可用，见 [Root 配置说明](Windows无线投屏Root配置说明.md)）
-  - 进一步压低延迟（当前约 60–130 ms）
-  - 支持 `wfd_idr_request_capability`，丢包后主动请求关键帧以加快恢复
-  - 探索按需建组，避免常驻占用 Wi-Fi Direct 接口
-
-### 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-### 📄 许可证
-
-本项目采用 MIT 许可证 - 详见 [LICENSE](LICENSE) 文件
-
----
-
-## English
-
-### ✨ Features
-
-- **🍎 AirPlay Support**: Perfect compatibility with iPhone, iPad, and Mac
-  - Screen mirroring (FairPlay decryption + H.264 hardware decoding)
+- **AirPlay**
+  - iPhone, iPad, and macOS discovery
+  - Screen mirroring
   - Video casting
-  - Audio streaming
+  - Audio playback
+  - Low-latency H.264 hardware decode path where available
 
-- **📺 DLNA/UPnP Support**: Compatible with DLNA clients across platforms
-  - Bilibili, Youku, iQiyi video apps
-  - Windows Media Player
-  - VLC Player
-  - Emby, Plex media servers
+- **DLNA / UPnP**
+  - Works with common DLNA-capable mobile and desktop applications
+  - Suitable for media apps such as Emby and other UPnP/DLNA senders
+  - Media3-based playback
 
-- **🖥️ Miracast/WFD**: The protocol behind both Windows Wireless Display and Android's built-in screen casting (**root required on some TVs**, see [Known Issues](#-known-issues))
-  - Full RTSP session negotiation (M1–M7)
-  - MPEG-2 TS demuxing + H.264 hardware decoding, fed straight to MediaCodec
-  - AAC / LPCM audio decoding, played as it arrives alongside the video
-  - Wi-Fi Direct P2P with WFD IE injection (discoverable via `Win+K` and Android screen casting)
-  - ~60–130 ms end-to-end latency, usable as a wireless second display
-  - See [Root Setup Guide](Windows无线投屏Root配置说明.md) (Chinese)
+- **Miracast / Wi-Fi Display**
+  - Windows `Win + K` wireless display support
+  - Android wireless display / Miracast support on compatible devices
+  - RTSP session handling
+  - RTP / MPEG-TS receive path
+  - H.264 hardware decode through MediaCodec
+  - AAC / LPCM audio handling
+  - Designed for low-latency second-screen use
 
-- **🎬 Powerful Playback**
-  - HTTP/HTTPS video streams
-  - HLS (.m3u8) live streams
-  - Multiple video formats (MP4, MKV, AVI, etc.)
-  - Image slideshow
-  - Playback speed control (0.5x - 2x)
-  - Quality selection (480p - 1080p)
+- **Direct HTTP media playback**
+  - Push a media URL from the WebUI directly to the TV
+  - HLS / `.m3u8`
+  - MPEG-DASH / `.mpd`
+  - MP4, TS, WebM, MP3, AAC, and other formats recognized by Android Media3
+  - Optional `User-Agent`, `Referer`, and `Authorization` headers
+  - Automatic retry for temporary network failures
+  - Network recovery handling
 
-- **⚡ Auto-start on boot**: The receiver service starts in the background after the TV boots, no need to open the app
-  - Waits for a LAN IP before starting AirPlay/DLNA/Miracast, so advertisements never bind to the wrong address
-  - Can be turned off with the "开机自动启动接收服务" switch on the main screen
+- **Android TV interface**
+  - TV-oriented 10-foot layout
+  - D-pad focus navigation
+  - Wrap-around focus chain for the main controls
+  - Focus scaling and automatic scroll-into-view
+  - Light and dark themes following the system configuration
+  - Double-Back exit protection: the first Back press shows a Toast, and a second press within two seconds closes only the UI while the receiver service keeps running
+  - Dedicated Android TV launcher banner and adaptive application icon
 
-### 📱 Supported Sources
+- **WebUI control center**
+  - Default preferred port: `18090`
+  - Automatic temporary fallback to an available port when the preferred port is already in use
+  - QR-code access from the TV screen
+  - Dashboard, protocol configuration, player controls, diagnostics, and logs
+  - Direct HTTP / HLS / DASH URL playback
+  - Responsive light and dark themes
+  - English, Simplified Chinese, Traditional Chinese, Japanese, and Korean UI
 
-| Platform | Protocol | Status | Notes |
-|----------|----------|--------|-------|
-| iPhone/iPad | AirPlay | ✅ Perfect | Screen mirroring, video, audio casting |
-| Android | DLNA | ✅ Perfect | Bilibili, Youku apps |
-| Android | Miracast | ✅ Supported (root on some TVs) | Found by the built-in screen cast, full mirroring with audio |
-| Windows | DLNA | ✅ Perfect | Media player casting |
-| Windows | Miracast | ✅ Supported (root on some TVs) | Discoverable via `Win+K`, works as second display, with audio |
-| Mac | AirPlay | ✅ Perfect | Native system support |
-| Emby/Plex | DLNA | ✅ Compatible | Media server casting |
+- **Configurable WebUI authentication**
+  - **Generated token**: persistent random token generated by the application
+  - **Custom token**: user-defined token, 8–128 characters, with whitespace/control characters rejected
+  - **No authentication**: direct LAN access without a token
+  - QR-code behavior automatically follows the selected authentication mode
+  - Token information is passed through the URL fragment (`#token=...`) so it is not sent in the HTTP request URL
 
-### 🚀 Quick Start
+- **Always-on receiver service**
+  - Foreground receiver service
+  - Auto-start after boot
+  - Service stays active when the main Activity is closed
+  - Magisk `service.d` fallback when available
+  - Root and Shizuku-assisted background optimization
 
-#### Download & Install
+- **Internationalization**
+  - English
+  - Simplified Chinese
+  - Traditional Chinese
+  - Japanese
+  - Korean
+  - Android 13+ per-app language support
+  - CI checks that localized Android string resources remain complete
 
-1. Download the latest APK from [Releases](https://github.com/weekdayjast/MiracastReceiver/releases)
-   - **ARM64 (Recommended)**: For most modern Android TVs
-   - **ARM32**: For older devices
+## Supported Sources
 
-2. Install on Android TV:
-   - USB: Copy APK to USB drive, plug into TV, install via file manager
-   - ADB: `adb install app-release.apk`
-   - Remote ADB: `adb connect <TV_IP>:5555 && adb install app-release.apk`
+| Source | Protocol | Status | Notes |
+|---|---|---|---|
+| iPhone / iPad | AirPlay | Supported | Screen mirroring, media, and audio |
+| macOS | AirPlay | Supported | Native AirPlay sender support |
+| Android apps | DLNA / UPnP | Supported | Works with compatible media apps |
+| Android system casting | Miracast | Device dependent | Some TVs require elevated privileges for WFD advertisement |
+| Windows | Miracast | Supported on compatible TVs | Use `Win + K` |
+| Windows / Linux media apps | DLNA / HTTP | Supported | Depends on sender capabilities |
+| Emby / similar media servers | DLNA | Supported | Client behavior may vary |
+| Browser / WebUI | HTTP / HLS / DASH | Supported | Push a direct URL to the TV player |
 
-#### Usage
+## Requirements
 
-1. Launch **Miracast Receiver** on your Android TV
-2. The app displays device name, IP address, and connection code
-3. Cast from your device:
+- Android 5.0+ (`minSdk 21`)
+- Android TV or Google TV is the primary target
+- LAN connectivity for discovery and WebUI access
+- JDK 17 for development builds
+- Android SDK API 36 for compilation
 
-**iPhone/iPad**:
-- Control Center → Screen Mirroring → Select your TV name
-- Or tap AirPlay icon in video apps
+Some Miracast features depend on the TV firmware. Devices that already expose a system Wi-Fi Display implementation generally work more easily. Other devices may require Root to expose or modify WFD-related behavior.
 
-**Android Phone**:
-- Tap cast button in DLNA-enabled apps (e.g., Bilibili)
-- Select the displayed device name
-- Or use the system's built-in screen cast / wireless display (Miracast, root required on some TVs — see [Known Issues](#-known-issues))
+## Installation
 
-**Windows**:
-- Use "Play To" in VLC or Windows Media Player
-- Or cast from Emby, Plex media servers
-- Or press `Win+K` to connect a wireless display (Miracast, root required on some TVs)
+Build artifacts are produced by GitHub Actions for pull requests and supported CI runs. The workflow builds a debug APK and uploads it as an artifact.
 
-### 🛠️ Build from Source
-
-#### Requirements
-
-- Android Studio 2026.1+
-- Android SDK API 36
-- JDK 17+
-- Gradle 8.11.1
-
-#### Build Steps
+For a local installation with ADB:
 
 ```bash
-# Clone repository
-git clone https://github.com/weekdayjast/MiracastReceiver.git
-cd MiracastReceiver
+adb install -r app-debug.apk
+```
 
-# Build debug APK
-cd MiracastReceiver
+For a remote Android TV with network ADB enabled:
+
+```bash
+adb connect <TV_IP>:5555
+adb install -r app-debug.apk
+```
+
+## Quick Start
+
+1. Install the APK on the Android TV device.
+2. Open **MiracastReceiver** once to review the TV status screen and grant any required permissions.
+3. Leave the receiver service enabled.
+4. Use the protocol appropriate for the sender:
+   - AirPlay from Apple devices
+   - DLNA/UPnP from compatible media applications
+   - Miracast / `Win + K` from Windows
+   - The WebUI for remote control and direct HTTP/HLS/DASH playback
+5. Scan the QR code shown on the TV to open the WebUI without manually typing a long address or token.
+
+Closing the main TV interface does not stop the background receiver service.
+
+## WebUI
+
+The preferred WebUI port is:
+
+```text
+18090
+```
+
+If that port is occupied, MiracastReceiver selects a temporary available port without overwriting the configured preferred port. On the next service start, the preferred port is tried again.
+
+The TV home screen displays the current runtime WebUI address and a QR code. When token authentication is active, the QR code carries the active token in the URL fragment rather than in the HTTP request path.
+
+### Authentication modes
+
+The WebUI supports three modes:
+
+| Mode | Behavior |
+|---|---|
+| Generated token | Uses a persistent random token created by the application |
+| Custom token | Uses a user-defined token validated by the application |
+| No authentication | Anyone on the reachable LAN can access the WebUI |
+
+Generated tokens remain stable across application, service, and TV restarts until explicitly rotated or application data is cleared.
+
+## Direct URL Playback
+
+The WebUI can launch remote media directly on the TV. Typical examples include:
+
+```text
+https://example.com/live/channel.m3u8
+https://example.com/manifest.mpd
+https://example.com/video.mp4
+```
+
+The player accepts only `http://` and `https://` URLs from this feature. Dangerous URI schemes such as `file://`, `content://`, `intent:`, `javascript:`, and `data:` are rejected.
+
+Temporary network failures use bounded retry logic, and playback can resume when network connectivity returns.
+
+## Android TV Remote Control Behavior
+
+The main screen is designed for D-pad navigation:
+
+- deterministic focus order
+- wrap-around navigation from the last main control back to the first
+- subtle focus scaling
+- focused controls are automatically scrolled into view
+
+The main screen also protects against accidental exit:
+
+1. Press **Back** once to show an exit hint.
+2. Press **Back** again within two seconds to close the Activity.
+3. The background receiver service continues running.
+
+The media player keeps its existing TV-oriented navigation behavior, including accelerated repeated seek operations inspired by Kodi-style controls.
+
+## Root and Shizuku
+
+Root is not mandatory for AirPlay, DLNA, the WebUI, or ordinary Media3 playback.
+
+Root or Shizuku can be used for background-related optimizations, and Root may be required on some TV firmware for advanced Miracast / Wi-Fi Display integration where the system does not provide the necessary privileged WFD capabilities.
+
+When Magisk is available, MiracastReceiver can install a `service.d` boot fallback so the receiver can be started more reliably after boot.
+
+## Building from Source
+
+Clone the repository:
+
+```bash
+git clone https://github.com/NNdroid/MiracastReceiver.git
+cd MiracastReceiver/MiracastReceiver
+```
+
+Build a debug APK:
+
+```bash
 ./gradlew assembleDebug
+```
 
-# Build release APK (requires signing configuration)
+Run unit tests:
+
+```bash
+./gradlew testDebugUnitTest
+```
+
+Build a release APK:
+
+```bash
 ./gradlew assembleRelease
+```
 
-# Build 64-bit and 32-bit APKs
+Build a specific ABI when required:
+
+```bash
 ./gradlew assembleRelease -PbuildArm64=true
 ./gradlew assembleRelease -PbuildArm32=true
 ```
 
-Output APKs: `app/build/outputs/apk/`
+APK outputs are written under:
 
-### 📖 Documentation
+```text
+app/build/outputs/apk/
+```
 
-- [Development Guide](开发与调试指南.md) - Complete development, packaging, installation, and debugging instructions (Chinese)
-- [Miracast Root Setup](Windows无线投屏Root配置说明.md) - Enabling steps, protocol implementation notes, troubleshooting (Chinese)
-- [Windows Wireless Display](Windows无线显示器支持说明.md) - Miracast protocol background (Chinese)
+## Technology Stack
 
-### 🔧 Tech Stack
+- Kotlin
+- AndroidX / AppCompat
+- Android TV / Leanback components
+- Media3 / ExoPlayer
+- MediaCodec
+- OkHttp
+- Kotlin Coroutines
+- ZXing
+- Shizuku API
+- mDNS / NSD
+- RTSP / RTP / Wi-Fi Direct / WFD
 
-- **Language**: Kotlin
-- **Min SDK**: Android 5.0 (API 21)
-- **Target SDK**: Android 14 (API 36)
-- **UI Framework**: Android TV Leanback
-- **Video Player**: ExoPlayer (Media3)
-- **Networking**: OkHttp, mDNS/NSD
-- **Protocols**: AirPlay, DLNA/UPnP, Miracast/WFD, RTSP, RTP
+## Continuous Integration
 
-### 🙏 Acknowledgements & References
+The Android CI workflow validates the project with checks including:
 
-- AirPlay screen mirroring is inspired by and references the protocol flow and implementation ideas from [PhairPlay](https://github.com/philippe44/PhairPlay).
+- WebUI JavaScript syntax validation
+- Android TV branding resource validation
+- localization completeness tests
+- unit tests
+- debug APK assembly
+- debug APK artifact upload
 
-### 🐛 Known Issues
+## Known Limitations
 
-1. **Miracast (Windows Wireless Display / Android Screen Cast) Requires Root on Some TVs**
-   - To be found by Windows `Win+K` and Android screen casting, the TV must broadcast the WFD IE
-   - **TVs with built-in screen mirroring (e.g. Sony BRAVIA) need no root**: the system already broadcasts the WFD IE
-     and the app takes over the session. Check with `adb shell settings get global wifi_display_on` — `1` means this case
-   - On other TVs, broadcasting the WFD IE requires the signature-level `CONFIGURE_WIFI_DISPLAY` permission,
-     so the app can only inject it after rooting; without root, use DLNA casting instead
-   - The "allow connection?" prompt on the TV when connecting is the system's Wi-Fi Direct authorization — just confirm it
-   - See [Root Setup Guide](Windows无线投屏Root配置说明.md) (Chinese)
+### Miracast availability depends on TV firmware
 
-2. **Emby Casting Compatibility**
-   - Some Emby clients may require special SOAP format handling
+Windows and Android system-level Miracast discovery requires Wi-Fi Display / WFD functionality at the platform level. Some TVs already expose the required capability; other devices may need Root-assisted integration.
 
-3. **Miracast lists the TV as `Android_xxxx` instead of its name**
-   - Android screen casting and Windows `Win+K` show the TV's Wi-Fi Direct device name, which the system owns
-   - Since Android 11, renaming it requires system permissions such as `NETWORK_SETTINGS`, so the app
-     cannot change it and the system default `Android_xxxx` remains
-   - If the TV has a Wi-Fi Direct page under Settings → Network, rename it there; otherwise it cannot be changed for now
-   - AirPlay / DLNA are unaffected and use the name from the TV's Settings → About → Device name
+### Wi-Fi Direct device naming
 
-4. **"Display over other apps" permission required**
-   - Since Android 10, apps may not open screens from the background. When the app is not open
-     (after auto-start on boot, or after returning to the home screen), the player is blocked and casting appears to do nothing
-   - The app prompts for it on first launch and opens the system settings page; if the TV has no such page, grant it via adb:
-     `adb shell appops set com.weekd.miracastreceiver SYSTEM_ALERT_WINDOW allow`
+The Miracast name visible to Windows or Android may come from the system Wi-Fi Direct device name instead of the name configured inside MiracastReceiver. Recent Android versions restrict changing this value without privileged system permissions.
 
-### 🗺️ Roadmap
+### Background Activity launch restrictions
 
-- **Enhance AirPlay Support**
-  - Optimize screen mirroring stability and latency
-  - Improve audio-video synchronization
+Modern Android versions restrict applications from opening Activities from the background. MiracastReceiver uses TV-appropriate permission and service strategies, but firmware behavior differs between vendors. On some devices, overlay permission may be required so an incoming cast can bring the player to the foreground reliably.
 
-- **Complete Miracast Casting (Windows / Android)** (audio and video work — see [Root Setup Guide](Windows无线投屏Root配置说明.md))
-  - Push latency down further (currently ~60–130 ms)
-  - Support `wfd_idr_request_capability` to request a keyframe after packet loss
-  - Explore on-demand group creation instead of holding the Wi-Fi Direct interface permanently
+### Sender interoperability
 
-### 🤝 Contributing
+DLNA, AirPlay, and Miracast implementations vary across vendors. Some applications may use non-standard request formats or codec combinations that require additional compatibility work.
 
-Issues and Pull Requests are welcome!
+## Security Notes
 
-### 📄 License
+- The WebUI is intended for trusted local networks.
+- Keep token authentication enabled unless unauthenticated LAN control is explicitly desired.
+- A custom WebUI token should be unique and not reused as an account password.
+- Direct media playback restricts remote URLs to HTTP and HTTPS.
+- The WebUI applies request-size and concurrent-client limits to reduce accidental or abusive resource consumption.
 
-This project is licensed under the MIT License - see [LICENSE](LICENSE) file for details
+## Contributing
 
----
+Issues and pull requests are welcome. When changing Android UI strings, update every supported locale because CI enforces locale key parity.
 
-## 📞 Contact
+For protocol or playback changes, include tests where practical and verify that Android TV remote-control behavior is not regressed.
 
-- GitHub Issues: [https://github.com/weekdayjast/MiracastReceiver/issues](https://github.com/weekdayjast/MiracastReceiver/issues)
+## License
 
-## ⭐ Star History
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
 
-If you find this project helpful, please give it a star!
+## Acknowledgements
+
+AirPlay mirroring work was informed by the protocol behavior and implementation ideas found in projects such as [PhairPlay](https://github.com/philippe44/PhairPlay).

@@ -4,12 +4,12 @@ import android.app.Application
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.support.v4.media.MediaMetadataCompat
+import android.support.v4.media.session.MediaSessionCompat
+import android.support.v4.media.session.PlaybackStateCompat
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
-import androidx.media.MediaMetadataCompat
-import androidx.media.session.MediaSessionCompat
-import androidx.media.session.PlaybackStateCompat
 import com.google.android.gms.cast.MediaLoadRequestData
 import com.google.android.gms.cast.tv.CastReceiverContext
 import com.google.android.gms.cast.tv.media.MediaLoadCommandCallback
@@ -21,13 +21,7 @@ import com.weekd.miracastreceiver.ui.UrlPlaybackActivity
 import com.weekd.miracastreceiver.web.RuntimeState
 import timber.log.Timber
 
-/**
- * Official Google Cast Connect integration.
- *
- * Cast Connect still requires a Cast App ID registered in the Google Cast SDK Developer Console
- * and an Android TV / Google TV device with the Google Cast receiver infrastructure. It does not
- * emulate a certified Chromecast on devices that do not ship Google's Cast implementation.
- */
+/** Official Google Cast Connect integration for Android TV / Google TV. */
 object GoogleCastReceiver {
     @Volatile
     var initialized: Boolean = false
@@ -198,7 +192,8 @@ object GoogleCastReceiver {
                 Tasks.forResult(loadRequestData)
             }.getOrElse { error ->
                 Timber.w(error, "Google Cast LOAD failed")
-                Tasks.forException(error)
+                val exception = error as? Exception ?: RuntimeException(error)
+                Tasks.forException(exception)
             }
         }
     }

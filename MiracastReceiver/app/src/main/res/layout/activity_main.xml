@@ -8,71 +8,25 @@
     <LinearLayout
         android:layout_width="238dp"
         android:layout_height="match_parent"
-        android:background="@color/surface_dark"
+        android:background="@color/surface_low"
         android:orientation="vertical"
         android:paddingLeft="24dp"
         android:paddingTop="30dp"
         android:paddingRight="18dp"
         android:paddingBottom="26dp">
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/app_name"
-            android:textColor="@color/text_primary"
-            android:textSize="24sp"
-            android:textStyle="bold" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/app_name" android:textColor="@color/text_primary" android:textSize="24sp" android:textStyle="bold" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:text="@string/tv_subtitle" android:textColor="@color/text_muted" android:textSize="12sp" />
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="@string/tv_subtitle"
-            android:textColor="@color/text_muted"
-            android:textSize="12sp" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="0dp"
-            android:layout_marginTop="30dp"
-            android:layout_weight="1"
-            android:orientation="vertical">
-
-            <TextView
-                android:id="@+id/nav_home"
-                style="@style/TvNavItem"
-                android:text="@string/nav_home" />
-
-            <TextView
-                android:id="@+id/nav_player"
-                style="@style/TvNavItem"
-                android:layout_marginTop="8dp"
-                android:text="@string/nav_player" />
-
-            <TextView
-                android:id="@+id/nav_settings"
-                style="@style/TvNavItem"
-                android:layout_marginTop="8dp"
-                android:text="@string/nav_settings" />
-
-            <TextView
-                android:id="@+id/nav_about"
-                style="@style/TvNavItem"
-                android:layout_marginTop="8dp"
-                android:text="@string/nav_about" />
+        <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_marginTop="30dp" android:layout_weight="1" android:orientation="vertical">
+            <TextView android:id="@+id/nav_home" style="@style/TvNavItem" android:text="@string/nav_home" />
+            <TextView android:id="@+id/nav_player" style="@style/TvNavItem" android:layout_marginTop="8dp" android:text="@string/nav_player" />
+            <TextView android:id="@+id/nav_settings" style="@style/TvNavItem" android:layout_marginTop="8dp" android:text="@string/nav_settings" />
+            <TextView android:id="@+id/nav_about" style="@style/TvNavItem" android:layout_marginTop="8dp" android:text="@string/nav_about" />
         </LinearLayout>
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/nav_remote_hint"
-            android:textColor="@color/text_muted"
-            android:textSize="11sp" />
+        <TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="@string/nav_remote_hint" android:textColor="@color/text_muted" android:textSize="11sp" />
     </LinearLayout>
 
-    <FrameLayout
-        android:id="@+id/fragment_container"
-        android:layout_width="0dp"
-        android:layout_height="match_parent"
-        android:layout_weight="1" />
+    <FrameLayout android:id="@+id/fragment_container" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" />
 </LinearLayout>

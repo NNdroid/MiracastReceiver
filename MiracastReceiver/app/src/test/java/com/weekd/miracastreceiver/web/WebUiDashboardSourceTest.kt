@@ -13,7 +13,7 @@ class WebUiDashboardSourceTest {
     fun managementAddressUsesVerifiedBrowserOrigin() {
         assertTrue(appJs.contains("const actualAddress=location.origin"))
         assertTrue(appJs.contains("navigator.clipboard.writeText(address)"))
-        assertFalse(appJs.contains("address=s.device.ip?`http://${s.device.ip}"))
+        assertFalse(appJs.contains("address=s.device.ip?"))
     }
 
     @Test

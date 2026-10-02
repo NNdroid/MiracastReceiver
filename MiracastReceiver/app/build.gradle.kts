@@ -22,8 +22,8 @@ android {
         applicationId = "com.weekd.miracastreceiver"
         minSdk = 21
         targetSdk = 36
-        versionCode = 27
-        versionName = "1.9.5"
+        versionCode = 28
+        versionName = "1.9.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

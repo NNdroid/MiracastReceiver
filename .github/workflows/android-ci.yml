@@ -1,0 +1,42 @@
+name: Android CI
+
+on:
+  pull_request:
+    paths:
+      - 'MiracastReceiver/**'
+      - '.github/workflows/android-ci.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'MiracastReceiver/**'
+      - '.github/workflows/android-ci.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: MiracastReceiver
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Unit tests
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: Assemble debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace

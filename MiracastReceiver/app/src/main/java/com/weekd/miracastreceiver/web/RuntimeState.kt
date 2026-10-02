@@ -10,6 +10,11 @@ object RuntimeState {
     @Volatile var networkIp: String = ""
     @Volatile var lastError: String = ""
 
+    @Volatile var webUiPreferredPort: Int = 0
+    @Volatile var webUiActivePort: Int = 0
+    @Volatile var webUiPortFallback: Boolean = false
+    @Volatile var webUiStartedAtMs: Long = 0L
+
     @Volatile var airPlayState: String = "IDLE"
     @Volatile var airPlaySender: String = ""
 
@@ -25,6 +30,12 @@ object RuntimeState {
     @Volatile var playbackSpeed: Float = 1f
     @Volatile var playbackVolume: Int = 100
     @Volatile var playbackSource: String = ""
+
+    fun resetWebUi() {
+        webUiActivePort = 0
+        webUiPortFallback = false
+        webUiStartedAtMs = 0L
+    }
 
     fun resetPlayback() {
         playbackState = "IDLE"

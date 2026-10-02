@@ -147,10 +147,26 @@ function collectConfig(){
 
 async function saveConfig(e){
   e?.preventDefault();
+  const next = collectConfig();
+  const oldPort = Number(location.port || 80);
   try {
-    await api('/api/config',{method:'POST',body:JSON.stringify(collectConfig())});
+    await api('/api/config',{method:'POST',body:JSON.stringify(next)});
+    if (!next.webUiEnabled) {
+      toast('配置已保存，WebUI 已关闭；重新开启后再访问此页面');
+      $('connectionBadge').textContent='WebUI 已关闭';
+      $('connectionBadge').className='badge';
+      return;
+    }
+
     toast('配置已保存，接收服务正在重载');
-    setTimeout(()=>location.reload(), 1200);
+    setTimeout(()=>{
+      if (next.webUiPort !== oldPort) {
+        const host = location.hostname.includes(':') ? `[${location.hostname}]` : location.hostname;
+        location.href = `${location.protocol}//${host}:${next.webUiPort}/`;
+      } else {
+        location.reload();
+      }
+    }, 1200);
   } catch(e){ toast(`保存失败：${e.message}`); }
 }
 $('configForm').addEventListener('submit', saveConfig);
@@ -165,7 +181,7 @@ $('seekBtn').addEventListener('click',()=>playerAction('seek',{positionMs:Number
 $('volumeBtn').addEventListener('click',()=>playerAction('volume',{value:Number($('volumeValue').value)}));
 $('speedBtn').addEventListener('click',()=>playerAction('speed',{value:Number($('speedValue').value)}));
 
-$('restartBtn').addEventListener('click',async()=>{ try{await api('/api/actions/restart',{method:'POST',body:'{}'});toast('接收服务正在重启');}catch(e){toast(e.message);} });
+$('restartBtn').addEventListener('click',async()=>{ try{await api('/api/actions/restart',{method:'POST',body:'{}'});toast('接收服务正在重载');}catch(e){toast(e.message);} });
 $('regenCodeBtn').addEventListener('click',async()=>{ try{const r=await api('/api/actions/regenerate-code',{method:'POST',body:'{}'});$('connectionCode').value=r.connectionCode;toast('连接码已更新');}catch(e){toast(e.message);} });
 $('optimizeBtn').addEventListener('click',async()=>{ try{const r=await api('/api/actions/background-optimize',{method:'POST',body:'{}'});toast(`${r.channel}: ${r.succeeded}/${r.attempted} 项成功`);}catch(e){toast(e.message);} });
 $('rotateTokenBtn').addEventListener('click',async()=>{ try{const r=await api('/api/actions/rotate-token',{method:'POST',body:'{}'});token=r.token;sessionStorage.setItem('miracastToken',token);toast('WebUI Token 已轮换，本浏览器已自动更新');}catch(e){toast(e.message);} });

@@ -2,46 +2,27 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Keep Android 5.x support while packaging Shizuku 13.1.5. The Shizuku provider and all
-         Shizuku API calls are disabled below API 24, matching the library's actual minSdk. -->
     <uses-sdk tools:overrideLibrary="rikka.shizuku.provider,rikka.shizuku.api,rikka.shizuku.shared,rikka.shizuku.aidl" />
 
-    <!-- 网络权限 -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
-    <!-- Wi-Fi Direct 需要定位权限。Android 12+ 只申请 FINE 会被系统拒绝，必须同时声明 COARSE。 -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" />
 
-    <!-- Wi-Fi Direct / Miracast 发现 -->
-    <uses-feature
-        android:name="android.hardware.wifi.direct"
-        android:required="false" />
+    <uses-feature android:name="android.hardware.wifi.direct" android:required="false" />
 
-    <!-- 前台服务权限 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
-    <!-- 开机自启时用 connectedDevice 类型，Android 15 起 BOOT_COMPLETED 不允许启动 mediaPlayback -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
-
-    <!-- 开机自动启动接收服务 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-
-    <!-- 后台拉起播放页：Android 10+ 禁止后台启动 Activity，只有前台服务不够，
-         持有「显示在其他应用上层」权限的应用可豁免，否则应用不在前台时投屏没有画面 -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
-    <!-- TV 特性声明 -->
-    <uses-feature
-        android:name="android.hardware.touchscreen"
-        android:required="false" />
-    <uses-feature
-        android:name="android.software.leanback"
-        android:required="true" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.software.leanback" android:required="true" />
 
     <application
         android:name=".MiracastApp"
@@ -49,12 +30,12 @@
         android:banner="@drawable/tv_banner"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
+        android:localeConfig="@xml/locales_config"
         android:supportsRtl="true"
         android:theme="@style/Theme.Leanback"
         android:usesCleartextTraffic="true"
-        tools:targetApi="31">
+        tools:targetApi="33">
 
-        <!-- Shizuku binder receiver. Enabled only on API 24+ by the versioned bool resource. -->
         <provider
             android:name="rikka.shizuku.ShizukuProvider"
             android:authorities="${applicationId}.shizuku"
@@ -63,7 +44,6 @@
             android:multiprocess="false"
             android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
-        <!-- 主 Activity - TV Launcher 入口 -->
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
@@ -76,7 +56,6 @@
             </intent-filter>
         </activity>
 
-        <!-- 投屏播放 Activity -->
         <activity
             android:name=".ui.PlayerActivity"
             android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize"
@@ -85,7 +64,6 @@
             android:screenOrientation="sensorLandscape"
             android:theme="@style/Theme.Leanback.Fullscreen" />
 
-        <!-- WebUI HTTP/HLS/DASH URL 播放 Activity；与实时镜像路径隔离，便于独立重试。 -->
         <activity
             android:name=".ui.UrlPlaybackActivity"
             android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize"
@@ -94,21 +72,18 @@
             android:screenOrientation="sensorLandscape"
             android:theme="@style/Theme.Leanback.Fullscreen" />
 
-        <!-- 连接确认 Activity -->
         <activity
             android:name=".ui.ConnectActivity"
             android:exported="false"
             android:screenOrientation="landscape"
             android:theme="@style/Theme.Leanback.Dialog" />
 
-        <!-- 投屏接收服务 -->
         <service
             android:name=".service.CastReceiverService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback|connectedDevice" />
 
-        <!-- 开机自启：把接收服务拉起来，不打开界面 -->
         <receiver
             android:name=".receiver.BootReceiver"
             android:enabled="true"

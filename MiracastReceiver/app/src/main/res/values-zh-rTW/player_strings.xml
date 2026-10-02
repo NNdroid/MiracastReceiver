@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources><string name="player_image_description">投放圖片</string><string name="player_remote_hint">方向鍵選擇控制 · 左右快轉/倒轉 · INFO/MENU 查看影片資訊</string><string name="player_previous">上一個</string><string name="player_rewind">倒轉</string><string name="player_play_pause">播放/暫停</string><string name="player_fast_forward">快轉</string><string name="player_next">下一個</string><string name="player_more">更多</string></resources>

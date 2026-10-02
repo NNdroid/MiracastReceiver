@@ -66,13 +66,8 @@ class UrlPlaybackActivity : AppCompatActivity() {
             when (intent?.action) {
                 PlayerActivity.ACTION_PLAY -> player?.play()
                 PlayerActivity.ACTION_PAUSE -> player?.pause()
-                PlayerActivity.ACTION_STOP -> {
-                    player?.stop()
-                    finish()
-                }
-                PlayerActivity.ACTION_SEEK -> player?.seekTo(
-                    intent.getLongExtra(PlayerActivity.EXTRA_SEEK_POSITION, 0L).coerceAtLeast(0L)
-                )
+                PlayerActivity.ACTION_STOP -> { player?.stop(); finish() }
+                PlayerActivity.ACTION_SEEK -> player?.seekTo(intent.getLongExtra(PlayerActivity.EXTRA_SEEK_POSITION, 0L).coerceAtLeast(0L))
                 PlayerActivity.ACTION_SET_VOLUME -> {
                     val volume = intent.getIntExtra(PlayerActivity.EXTRA_VOLUME, 100).coerceIn(0, 100)
                     player?.volume = volume / 100f
@@ -115,11 +110,12 @@ class UrlPlaybackActivity : AppCompatActivity() {
     private fun handleIntent(intent: Intent) {
         val url = intent.getStringExtra(EXTRA_URL)?.trim().orEmpty()
         if (url.isEmpty()) {
-            showFatalError("缺少媒体 URL")
+            showFatalError(getString(R.string.url_player_invalid_request))
             return
         }
         currentUrl = url
-        currentTitle = intent.getStringExtra(EXTRA_TITLE)?.takeIf { it.isNotBlank() } ?: url
+        currentTitle = intent.getStringExtra(EXTRA_TITLE)?.takeIf { it.isNotBlank() }
+            ?: getString(R.string.url_player_default_title)
         requestHeaders = parseHeaders(intent.getStringExtra(EXTRA_HEADERS_JSON))
         retryAttempt = 0
         retryJob?.cancel()
@@ -148,7 +144,7 @@ class UrlPlaybackActivity : AppCompatActivity() {
                         when (playbackState) {
                             Player.STATE_BUFFERING -> {
                                 bufferingIndicator.visibility = View.VISIBLE
-                                tvStatus.text = if (retryAttempt > 0) "重试后正在缓冲…" else "正在缓冲…"
+                                tvStatus.setText(R.string.buffering)
                                 updateSnapshot("BUFFERING")
                             }
                             Player.STATE_READY -> {
@@ -156,12 +152,12 @@ class UrlPlaybackActivity : AppCompatActivity() {
                                 waitingForNetwork = false
                                 bufferingIndicator.visibility = View.GONE
                                 tvError.visibility = View.GONE
-                                tvStatus.text = "正在播放"
+                                tvStatus.setText(R.string.playing)
                                 updateSnapshot(if (exo.isPlaying) "PLAYING" else "READY")
                             }
                             Player.STATE_ENDED -> {
                                 bufferingIndicator.visibility = View.GONE
-                                tvStatus.text = "播放完成"
+                                tvStatus.setText(R.string.playback_finished)
                                 updateSnapshot("ENDED")
                             }
                             Player.STATE_IDLE -> updateSnapshot("IDLE")
@@ -170,7 +166,7 @@ class UrlPlaybackActivity : AppCompatActivity() {
 
                     override fun onIsPlayingChanged(isPlaying: Boolean) {
                         if (exo.playbackState == Player.STATE_READY) {
-                            tvStatus.text = if (isPlaying) "正在播放" else "已暂停"
+                            tvStatus.setText(if (isPlaying) R.string.playing else R.string.paused)
                             updateSnapshot(if (isPlaying) "PLAYING" else "PAUSED")
                         }
                     }
@@ -178,12 +174,11 @@ class UrlPlaybackActivity : AppCompatActivity() {
                     override fun onPlayerError(error: PlaybackException) {
                         Timber.w(error, "URL playback error for $currentUrl")
                         bufferingIndicator.visibility = View.GONE
-                        val retryable = isRetryable(error)
                         RuntimeState.playbackError = error.message.orEmpty()
-                        if (retryable && retryAttempt < MAX_RETRY_ATTEMPTS) {
+                        if (isRetryable(error) && retryAttempt < MAX_RETRY_ATTEMPTS) {
                             scheduleRetry(error)
                         } else {
-                            showFatalError(error.message ?: "播放失败")
+                            showFatalError(error.message ?: getString(R.string.error_unknown))
                         }
                     }
                 })
@@ -196,14 +191,7 @@ class UrlPlaybackActivity : AppCompatActivity() {
         tvTitle.text = currentTitle
         tvError.visibility = View.GONE
         RuntimeState.updatePlayback {
-            it.copy(
-                state = "BUFFERING",
-                title = currentTitle,
-                uri = currentUrl,
-                source = "WEB_URL",
-                error = "",
-                retryAttempt = 0
-            )
+            it.copy(state = "BUFFERING", title = currentTitle, uri = currentUrl, source = "WEB_URL", error = "", retryAttempt = 0)
         }
         startProgressUpdates()
     }
@@ -224,10 +212,8 @@ class UrlPlaybackActivity : AppCompatActivity() {
         val delayMs = RETRY_DELAYS_MS[index]
         retryAttempt++
         waitingForNetwork = true
-        RuntimeState.updatePlayback {
-            it.copy(state = "RETRYING", error = error.message.orEmpty(), retryAttempt = retryAttempt)
-        }
-        tvStatus.text = "网络异常，${delayMs / 1000}s 后重试 ($retryAttempt/$MAX_RETRY_ATTEMPTS)"
+        RuntimeState.updatePlayback { it.copy(state = "RETRYING", error = error.message.orEmpty(), retryAttempt = retryAttempt) }
+        tvStatus.text = getString(R.string.url_player_retrying, delayMs / 1000, retryAttempt, MAX_RETRY_ATTEMPTS)
         retryJob = lifecycleScope.launch {
             delay(delayMs)
             retryNow()
@@ -239,7 +225,7 @@ class UrlPlaybackActivity : AppCompatActivity() {
         retryJob = null
         val exo = player ?: return
         waitingForNetwork = false
-        tvStatus.text = "正在重新连接…"
+        tvStatus.setText(R.string.url_player_network_recovered)
         exo.prepare()
         exo.playWhenReady = true
     }
@@ -265,9 +251,7 @@ class UrlPlaybackActivity : AppCompatActivity() {
         val cm = getSystemService(ConnectivityManager::class.java)
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
-                if (waitingForNetwork || RuntimeState.playbackState == "RETRYING") {
-                    runOnUiThread { retryNow() }
-                }
+                if (waitingForNetwork || RuntimeState.playbackState == "RETRYING") runOnUiThread { retryNow() }
             }
         }
         runCatching { cm.registerDefaultNetworkCallback(callback) }
@@ -315,8 +299,8 @@ class UrlPlaybackActivity : AppCompatActivity() {
     }
 
     private fun showFatalError(message: String) {
-        tvStatus.text = "播放错误"
-        tvError.text = "播放错误: $message"
+        tvStatus.setText(R.string.error_playback)
+        tvError.text = getString(R.string.playback_error_detail, message)
         tvError.visibility = View.VISIBLE
         bufferingIndicator.visibility = View.GONE
         RuntimeState.updatePlayback { it.copy(state = "ERROR", error = message, retryAttempt = retryAttempt) }

@@ -1,5 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Android TV playback OSD: large D-pad targets, clear focus ring, minimal screen coverage. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
@@ -12,147 +11,18 @@
     android:paddingRight="48dp"
     android:paddingBottom="24dp">
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:gravity="center_vertical"
-        android:orientation="horizontal">
-
-        <TextView
-            android:id="@+id/exo_position"
-            android:layout_width="72dp"
-            android:layout_height="wrap_content"
-            android:gravity="start|center_vertical"
-            android:includeFontPadding="false"
-            android:textColor="@color/text_primary"
-            android:textSize="16sp"
-            android:textStyle="bold" />
-
-        <androidx.media3.ui.DefaultTimeBar
-            android:id="@+id/exo_progress"
-            android:layout_width="0dp"
-            android:layout_height="32dp"
-            android:layout_weight="1"
-            android:focusable="true"
-            android:focusableInTouchMode="false"
-            app:played_color="@color/accent"
-            app:buffered_color="#90FFFFFF"
-            app:unplayed_color="#35FFFFFF"
-            app:scrubber_color="@color/accent"
-            app:scrubber_dragged_size="18dp"
-            app:scrubber_enabled_size="14dp"
-            app:scrubber_disabled_size="0dp" />
-
-        <TextView
-            android:id="@+id/exo_duration"
-            android:layout_width="72dp"
-            android:layout_height="wrap_content"
-            android:gravity="end|center_vertical"
-            android:includeFontPadding="false"
-            android:textColor="@color/text_primary"
-            android:textSize="16sp"
-            android:textStyle="bold" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:orientation="horizontal">
+        <TextView android:id="@+id/exo_position" android:layout_width="72dp" android:layout_height="wrap_content" android:gravity="start|center_vertical" android:includeFontPadding="false" android:textColor="@color/text_primary" android:textSize="16sp" android:textStyle="bold" />
+        <androidx.media3.ui.DefaultTimeBar android:id="@+id/exo_progress" android:layout_width="0dp" android:layout_height="32dp" android:layout_weight="1" android:focusable="true" android:focusableInTouchMode="false" app:played_color="@color/accent" app:buffered_color="#90FFFFFF" app:unplayed_color="#35FFFFFF" app:scrubber_color="@color/accent" app:scrubber_dragged_size="18dp" app:scrubber_enabled_size="14dp" app:scrubber_disabled_size="0dp" />
+        <TextView android:id="@+id/exo_duration" android:layout_width="72dp" android:layout_height="wrap_content" android:gravity="end|center_vertical" android:includeFontPadding="false" android:textColor="@color/text_primary" android:textSize="16sp" android:textStyle="bold" />
     </LinearLayout>
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:gravity="center"
-        android:orientation="horizontal">
-
-        <ImageButton
-            android:id="@+id/exo_prev"
-            android:layout_width="56dp"
-            android:layout_height="56dp"
-            android:layout_marginHorizontal="6dp"
-            android:background="@drawable/bg_player_button_tv"
-            android:contentDescription="上一个"
-            android:focusable="true"
-            android:focusableInTouchMode="false"
-            android:nextFocusRight="@id/exo_rew"
-            android:padding="14dp"
-            android:scaleType="fitCenter"
-            android:src="@android:drawable/ic_menu_revert"
-            android:tint="@color/text_primary" />
-
-        <ImageButton
-            android:id="@+id/exo_rew"
-            android:layout_width="56dp"
-            android:layout_height="56dp"
-            android:layout_marginHorizontal="6dp"
-            android:background="@drawable/bg_player_button_tv"
-            android:contentDescription="后退"
-            android:focusable="true"
-            android:focusableInTouchMode="false"
-            android:nextFocusLeft="@id/exo_prev"
-            android:nextFocusRight="@id/exo_play_pause"
-            android:padding="14dp"
-            android:scaleType="fitCenter"
-            android:src="@android:drawable/ic_media_rew"
-            android:tint="@color/text_primary" />
-
-        <ImageButton
-            android:id="@+id/exo_play_pause"
-            android:layout_width="68dp"
-            android:layout_height="68dp"
-            android:layout_marginHorizontal="8dp"
-            android:background="@drawable/bg_player_button_tv"
-            android:contentDescription="播放/暂停"
-            android:focusable="true"
-            android:focusableInTouchMode="false"
-            android:nextFocusLeft="@id/exo_rew"
-            android:nextFocusRight="@id/exo_ffwd"
-            android:padding="16dp"
-            android:scaleType="fitCenter"
-            android:tint="@color/text_primary" />
-
-        <ImageButton
-            android:id="@+id/exo_ffwd"
-            android:layout_width="56dp"
-            android:layout_height="56dp"
-            android:layout_marginHorizontal="6dp"
-            android:background="@drawable/bg_player_button_tv"
-            android:contentDescription="前进"
-            android:focusable="true"
-            android:focusableInTouchMode="false"
-            android:nextFocusLeft="@id/exo_play_pause"
-            android:nextFocusRight="@id/exo_next"
-            android:padding="14dp"
-            android:scaleType="fitCenter"
-            android:src="@android:drawable/ic_media_ff"
-            android:tint="@color/text_primary" />
-
-        <ImageButton
-            android:id="@+id/exo_next"
-            android:layout_width="56dp"
-            android:layout_height="56dp"
-            android:layout_marginHorizontal="6dp"
-            android:background="@drawable/bg_player_button_tv"
-            android:contentDescription="下一个"
-            android:focusable="true"
-            android:focusableInTouchMode="false"
-            android:nextFocusLeft="@id/exo_ffwd"
-            android:nextFocusRight="@id/btn_more"
-            android:padding="14dp"
-            android:rotation="180"
-            android:scaleType="fitCenter"
-            android:src="@android:drawable/ic_menu_revert"
-            android:tint="@color/text_primary" />
-
-        <ImageButton
-            android:id="@+id/btn_more"
-            android:layout_width="56dp"
-            android:layout_height="56dp"
-            android:layout_marginHorizontal="6dp"
-            android:background="@drawable/bg_player_button_tv"
-            android:contentDescription="更多"
-            android:focusable="true"
-            android:focusableInTouchMode="false"
-            android:nextFocusLeft="@id/exo_next"
-            android:padding="14dp"
-            android:scaleType="fitCenter"
-            android:src="@android:drawable/ic_menu_more"
-            android:tint="@color/text_primary" />
+    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" android:gravity="center" android:orientation="horizontal">
+        <ImageButton android:id="@+id/exo_prev" android:layout_width="56dp" android:layout_height="56dp" android:layout_marginHorizontal="6dp" android:background="@drawable/bg_player_button_tv" android:contentDescription="@string/player_previous" android:focusable="true" android:focusableInTouchMode="false" android:nextFocusRight="@id/exo_rew" android:padding="14dp" android:scaleType="fitCenter" android:src="@android:drawable/ic_menu_revert" android:tint="@color/text_primary" />
+        <ImageButton android:id="@+id/exo_rew" android:layout_width="56dp" android:layout_height="56dp" android:layout_marginHorizontal="6dp" android:background="@drawable/bg_player_button_tv" android:contentDescription="@string/player_rewind" android:focusable="true" android:focusableInTouchMode="false" android:nextFocusLeft="@id/exo_prev" android:nextFocusRight="@id/exo_play_pause" android:padding="14dp" android:scaleType="fitCenter" android:src="@android:drawable/ic_media_rew" android:tint="@color/text_primary" />
+        <ImageButton android:id="@+id/exo_play_pause" android:layout_width="68dp" android:layout_height="68dp" android:layout_marginHorizontal="8dp" android:background="@drawable/bg_player_button_tv" android:contentDescription="@string/player_play_pause" android:focusable="true" android:focusableInTouchMode="false" android:nextFocusLeft="@id/exo_rew" android:nextFocusRight="@id/exo_ffwd" android:padding="16dp" android:scaleType="fitCenter" android:tint="@color/text_primary" />
+        <ImageButton android:id="@+id/exo_ffwd" android:layout_width="56dp" android:layout_height="56dp" android:layout_marginHorizontal="6dp" android:background="@drawable/bg_player_button_tv" android:contentDescription="@string/player_fast_forward" android:focusable="true" android:focusableInTouchMode="false" android:nextFocusLeft="@id/exo_play_pause" android:nextFocusRight="@id/exo_next" android:padding="14dp" android:scaleType="fitCenter" android:src="@android:drawable/ic_media_ff" android:tint="@color/text_primary" />
+        <ImageButton android:id="@+id/exo_next" android:layout_width="56dp" android:layout_height="56dp" android:layout_marginHorizontal="6dp" android:background="@drawable/bg_player_button_tv" android:contentDescription="@string/player_next" android:focusable="true" android:focusableInTouchMode="false" android:nextFocusLeft="@id/exo_ffwd" android:nextFocusRight="@id/btn_more" android:padding="14dp" android:rotation="180" android:scaleType="fitCenter" android:src="@android:drawable/ic_menu_revert" android:tint="@color/text_primary" />
+        <ImageButton android:id="@+id/btn_more" android:layout_width="56dp" android:layout_height="56dp" android:layout_marginHorizontal="6dp" android:background="@drawable/bg_player_button_tv" android:contentDescription="@string/player_more" android:focusable="true" android:focusableInTouchMode="false" android:nextFocusLeft="@id/exo_next" android:padding="14dp" android:scaleType="fitCenter" android:src="@android:drawable/ic_menu_more" android:tint="@color/text_primary" />
     </LinearLayout>
 </LinearLayout>

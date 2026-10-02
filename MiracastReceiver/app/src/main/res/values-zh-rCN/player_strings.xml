@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources><string name="player_image_description">投屏图片</string><string name="player_remote_hint">方向键选择控制 · 左右快进/快退 · INFO/MENU 查看视频信息</string><string name="player_previous">上一个</string><string name="player_rewind">后退</string><string name="player_play_pause">播放/暂停</string><string name="player_fast_forward">前进</string><string name="player_next">下一个</string><string name="player_more">更多</string></resources>

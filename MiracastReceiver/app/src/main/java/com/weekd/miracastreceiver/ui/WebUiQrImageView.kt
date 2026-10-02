@@ -11,10 +11,7 @@ import com.weekd.miracastreceiver.utils.NetworkUtils
 import com.weekd.miracastreceiver.utils.QrCodeUtils
 import com.weekd.miracastreceiver.web.RuntimeState
 
-/**
- * TV-side QR code that always points at the WebUI's effective runtime port.
- * The API token is carried in the URL fragment so it is never sent as an HTTP query parameter.
- */
+/** TV-side QR code that always points at the WebUI's effective runtime port. */
 class WebUiQrImageView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
@@ -51,8 +48,8 @@ class WebUiQrImageView @JvmOverloads constructor(
             return
         }
 
-        val ip = NetworkUtils.getLocalIpAddress()
-        if (ip.isNullOrBlank()) {
+        val address = NetworkUtils.getLanAddresses().preferred
+        if (address.isNullOrBlank()) {
             visibility = View.INVISIBLE
             return
         }
@@ -60,12 +57,10 @@ class WebUiQrImageView @JvmOverloads constructor(
         val port = RuntimeState.webUiPort.takeIf { it in 1024..65535 }
             ?: AppSettings.getWebUiLastBoundPort(context)
             ?: AppSettings.getWebUiPort(context)
-        val baseUrl = "http://$ip:$port/"
+        val baseUrl = NetworkUtils.buildHttpUrl(address, port, "/")
         val payload = if (AppSettings.isWebUiAuthRequired(context)) {
             "$baseUrl#token=${AppSettings.getOrCreateWebUiToken(context)}"
-        } else {
-            baseUrl
-        }
+        } else baseUrl
 
         if (payload == lastPayload && drawable != null) {
             visibility = View.VISIBLE
@@ -74,7 +69,7 @@ class WebUiQrImageView @JvmOverloads constructor(
 
         QrCodeUtils.create(payload, QR_SIZE_PX)?.let { bitmap ->
             setImageBitmap(bitmap)
-            contentDescription = "扫码打开 MiracastReceiver WebUI"
+            contentDescription = context.getString(com.weekd.miracastreceiver.R.string.webui_qr_description)
             visibility = View.VISIBLE
             lastPayload = payload
         } ?: run {

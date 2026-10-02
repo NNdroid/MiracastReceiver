@@ -1,12 +1,17 @@
 package com.weekd.miracastreceiver.utils
 
 import timber.log.Timber
+import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
+import java.net.Socket
+import java.net.SocketException
 import java.security.SecureRandom
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.atomic.AtomicBoolean
 
-/** TCP port selection for the local management WebUI. */
+/** TCP port selection and deterministic IPv4/IPv6 listener binding. */
 object PortUtils {
 
     private const val RANDOM_PORT_MIN = 20_000
@@ -36,17 +41,23 @@ object PortUtils {
             val candidate = ServerSocket(0).use { it.localPort }
             if (candidate in 1024..65535 && candidate !in excludedPorts) return candidate
         }
-        throw IllegalStateException("Unable to allocate a WebUI TCP port")
+        throw IllegalStateException("Unable to allocate a TCP port")
     }
 
     /**
-     * Bind the primary WebUI listener explicitly on IPv4 wildcard.
+     * Bind a logical server socket that is reachable through both IPv4 and IPv6 whenever the
+     * platform supports them.
      *
-     * Android vendor kernels are not consistent about whether an unspecified Java ServerSocket
-     * wildcard becomes IPv4, dual-stack, or IPv6-only. The previous platform-wildcard binding could
-     * therefore make the WebUI unreachable through the IPv4 LAN address shown on the TV. Keep the
-     * management listener deterministic and reachable on 0.0.0.0; a dedicated IPv6 listener can be
-     * layered on separately without risking IPv4 reachability.
+     * Android vendor kernels differ in the default value of IPV6_V6ONLY. Binding only 0.0.0.0
+     * makes IPv6 URLs dead; binding only :: can make IPv4 dead on v6-only sockets. We therefore:
+     *  1. preflight IPv4 availability for the candidate port;
+     *  2. bind :: first;
+     *  3. bind 0.0.0.0 to the same port as well when the IPv6 socket is v6-only;
+     *  4. if the IPv4 bind becomes EADDRINUSE only after :: was bound, treat the IPv6 socket as a
+     *     dual-stack listener (the common Linux/Android behavior with IPV6_V6ONLY=0).
+     *
+     * The returned ServerSocket multiplexes accepts from both physical sockets, so existing server
+     * code can keep a single accept loop.
      */
     fun bindAvailableServerSocket(
         preferredPort: Int,
@@ -59,8 +70,10 @@ object PortUtils {
         if (fallbackPort != null && fallbackPort in 1024..65535 && fallbackPort !in excludedPorts) candidates += fallbackPort
 
         for (candidate in candidates) {
-            tryBindIpv4(candidate, backlog)?.let { socket ->
-                if (candidate != preferredPort) Timber.w("WebUI preferred port $preferredPort unavailable; reused fallback port $candidate")
+            tryBindDualStack(candidate, backlog)?.let { socket ->
+                if (candidate != preferredPort) {
+                    Timber.w("Preferred TCP port $preferredPort unavailable; reused fallback port $candidate")
+                }
                 return socket
             }
         }
@@ -68,25 +81,23 @@ object PortUtils {
         repeat(RANDOM_ATTEMPTS) {
             val candidate = randomHighPort()
             if (candidate !in excludedPorts) {
-                tryBindIpv4(candidate, backlog)?.let { socket ->
-                    Timber.w("WebUI preferred port $preferredPort unavailable; bound random port $candidate")
+                tryBindDualStack(candidate, backlog)?.let { socket ->
+                    Timber.w("Preferred TCP port $preferredPort unavailable; bound random port $candidate")
                     return socket
                 }
             }
         }
 
         repeat(8) {
-            val socket = ServerSocket().apply {
-                reuseAddress = true
-                bind(InetSocketAddress(IPV4_WILDCARD, 0), backlog)
+            val candidate = ServerSocket(0).use { it.localPort }
+            if (candidate !in excludedPorts && candidate >= 1024) {
+                tryBindDualStack(candidate, backlog)?.let { socket ->
+                    Timber.w("TCP listener fell back to kernel-selected port $candidate")
+                    return socket
+                }
             }
-            if (socket.localPort !in excludedPorts && socket.localPort >= 1024) {
-                Timber.w("WebUI fell back to kernel-assigned IPv4 port ${socket.localPort}")
-                return socket
-            }
-            socket.close()
         }
-        throw IllegalStateException("Unable to bind a WebUI TCP port")
+        throw IllegalStateException("Unable to bind a dual-stack TCP port")
     }
 
     fun isTcpPortAvailable(port: Int): Boolean {
@@ -94,12 +105,40 @@ object PortUtils {
         return tryBindIpv4(port, 1)?.use { true } ?: false
     }
 
-    private fun tryBindIpv4(port: Int, backlog: Int): ServerSocket? {
+    private fun tryBindDualStack(port: Int, backlog: Int): ServerSocket? {
         if (port !in 1024..65535) return null
+
+        // Reject ports that were already occupied on IPv4 before we touched IPv6. This lets us
+        // distinguish a real conflict from the normal case where a dual-stack :: socket claims
+        // the IPv4 wildcard after it is bound.
+        val ipv4WasAvailable = tryBindIpv4(port, 1)?.use { true } ?: false
+        if (!ipv4WasAvailable) return null
+
+        val ipv6 = tryBind(IPV6_WILDCARD, port, backlog)
+        val ipv4 = tryBindIpv4(port, backlog)
+
+        if (ipv6 == null && ipv4 == null) return null
+
+        val physicalSockets = listOfNotNull(ipv6, ipv4)
+        val mode = when {
+            ipv6 != null && ipv4 != null -> "separate IPv6 + IPv4 sockets"
+            ipv6 != null -> "IPv6 wildcard (dual-stack IPv4-mapped expected)"
+            else -> "IPv4-only fallback (IPv6 unavailable on platform)"
+        }
+        Timber.i("TCP listener bound on port $port using $mode")
+
+        return if (physicalSockets.size == 1) physicalSockets.first()
+        else MultiplexingServerSocket(port, physicalSockets)
+    }
+
+    private fun tryBindIpv4(port: Int, backlog: Int): ServerSocket? =
+        tryBind(IPV4_WILDCARD, port, backlog)
+
+    private fun tryBind(address: InetAddress, port: Int, backlog: Int): ServerSocket? {
         return try {
             ServerSocket().apply {
                 reuseAddress = true
-                bind(InetSocketAddress(IPV4_WILDCARD, port), backlog)
+                bind(InetSocketAddress(address, port), backlog)
             }
         } catch (_: Exception) {
             null
@@ -109,4 +148,64 @@ object PortUtils {
     private fun randomHighPort(): Int = RANDOM_PORT_MIN + random.nextInt(RANDOM_PORT_MAX - RANDOM_PORT_MIN + 1)
 
     private val IPV4_WILDCARD: InetAddress by lazy { InetAddress.getByName("0.0.0.0") }
+    private val IPV6_WILDCARD: InetAddress by lazy { InetAddress.getByName("::") }
+
+    /** A ServerSocket facade that merges accepts from IPv4 and IPv6 physical listeners. */
+    private class MultiplexingServerSocket(
+        private val boundPort: Int,
+        private val delegates: List<ServerSocket>
+    ) : ServerSocket() {
+        private val closed = AtomicBoolean(false)
+        private val accepted = LinkedBlockingQueue<AcceptResult>()
+
+        init {
+            delegates.forEach { delegate ->
+                Thread({ acceptLoop(delegate) }, "dual-stack-accept-${delegate.inetAddress.hostAddress}-$boundPort").apply {
+                    isDaemon = true
+                    start()
+                }
+            }
+        }
+
+        private fun acceptLoop(delegate: ServerSocket) {
+            while (!closed.get() && !delegate.isClosed) {
+                try {
+                    accepted.put(AcceptResult.Client(delegate.accept()))
+                } catch (e: Exception) {
+                    if (!closed.get() && !delegate.isClosed) {
+                        accepted.offer(AcceptResult.Error(e))
+                    }
+                    break
+                }
+            }
+        }
+
+        override fun accept(): Socket {
+            while (!closed.get()) {
+                when (val result = accepted.take()) {
+                    is AcceptResult.Client -> return result.socket
+                    is AcceptResult.Error -> throw SocketException(result.error.message ?: "dual-stack accept failed")
+                }
+            }
+            throw SocketException("Socket is closed")
+        }
+
+        override fun close() {
+            if (!closed.compareAndSet(false, true)) return
+            delegates.forEach { runCatching { it.close() } }
+            super.close()
+            accepted.offer(AcceptResult.Error(SocketException("Socket is closed")))
+        }
+
+        override fun isClosed(): Boolean = closed.get()
+        override fun getLocalPort(): Int = boundPort
+        override fun getInetAddress(): InetAddress =
+            delegates.firstOrNull { it.inetAddress is Inet6Address }?.inetAddress
+                ?: delegates.first().inetAddress
+
+        private sealed class AcceptResult {
+            data class Client(val socket: Socket) : AcceptResult()
+            data class Error(val error: Exception) : AcceptResult()
+        }
+    }
 }

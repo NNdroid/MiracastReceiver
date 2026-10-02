@@ -1,24 +1,9 @@
 /*
- * wfdctl —— wpa_supplicant 控制接口客户端，用于注入 Wi-Fi Display Sink 的 WFD IE。
+ * wfdctl —— wpa_supplicant control-interface client for injecting Wi-Fi Display sink state.
  *
- * 为什么需要它：Windows 的「连接到无线显示器」靠扫描 beacon/probe response 里的
- * WFD IE 来发现设备，而该 IE 只能由 wpa_supplicant 广播。应用层调
- * WifiP2pManager.setWFDInfo() 需要 signature 级的 CONFIGURE_WIFI_DISPLAY 权限，
- * 普通应用必定拿到 SecurityException（实测日志：
- * "Wifi Display Permission denied for uid = 10392"）。
- *
- * 绕过办法是直接和 wpa_supplicant 的控制 socket 对话，但那个 socket 属主是 wifi 用户
- * 且受 SELinux 保护，所以本程序需要由 su 拉起。ROM 通常不带 wpa_cli，故自带一个。
- *
- * 打包方式：编译产物命名为 libwfdctl.so，这样会被 AGP 打进 APK 的 jniLibs，
- * 解压到 nativeLibraryDir 且带可执行权限，可以用 su 直接执行。
- *
- * 协议：控制接口是 UNIX datagram socket，收发纯文本。客户端自己的 socket 必须建在
- * wpa_supplicant 能写回的目录里（继承 wifi_data_file 的 SELinux 标签）并 chown 给 wifi。
- *
- * 用法：libwfdctl.so <ctrl_socket> <命令> [命令...]
- * 例如：libwfdctl.so /data/misc/wifi/sockets/p2p0 "SET wifi_display 1" \
- *                   "WFD_SUBELEM_SET 0 000600111c440032"
+ * Normal applications cannot call WifiP2pManager.setWFDInfo() on modern Android because it
+ * requires signature-level CONFIGURE_WIFI_DISPLAY. On rooted Android TV devices this small
+ * executable talks directly to the supplicant control socket.
  */
 #include <errno.h>
 #include <stdio.h>
@@ -29,6 +14,7 @@
 #include <unistd.h>
 
 #define WIFI_UID 1010 /* AID_WIFI */
+#define REPLY_TIMEOUT_USEC 300000
 
 static int ctrl_fd = -1;
 static char local_path[108];
@@ -59,7 +45,6 @@ static int ctrl_open(const char *server_path)
         fprintf(stderr, "bind(%s) failed: %s\n", local_path, strerror(errno));
         return -1;
     }
-    /* wpa_supplicant 以 wifi 用户运行，回包要能写进来 */
     if (chown(local_path, WIFI_UID, WIFI_UID) < 0)
         fprintf(stderr, "warn: chown failed: %s\n", strerror(errno));
     if (chmod(local_path, 0770) < 0)
@@ -76,10 +61,10 @@ static int ctrl_open(const char *server_path)
 }
 
 /*
- * 发一条命令并尝试读回复。
- * 注意：SELinux enforcing 下 wpa_supplicant 回包会被拒（scontext=su），
- * 但命令本身已经送达并执行 —— 实测 WFD_SUBELEM_GET 能读回刚设进去的值。
- * 因此读不到回复不算失败，只记录。
+ * Send one command and briefly wait for a reply. Some SELinux policies allow the command to reach
+ * wpa_supplicant but prevent the response from reaching the su-domain client. A missing reply is
+ * therefore not treated as failure. The old two-second timeout made four-command advertisement
+ * refreshes block for up to eight seconds; 300 ms is sufficient for normal local-socket replies.
  */
 static int ctrl_request(const char *cmd)
 {
@@ -92,8 +77,8 @@ static int ctrl_request(const char *cmd)
         return -1;
     }
 
-    tv.tv_sec = 2;
-    tv.tv_usec = 0;
+    tv.tv_sec = 0;
+    tv.tv_usec = REPLY_TIMEOUT_USEC;
     setsockopt(ctrl_fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     n = recv(ctrl_fd, reply, sizeof(reply) - 1, 0);
@@ -101,7 +86,6 @@ static int ctrl_request(const char *cmd)
         reply[n] = '\0';
         printf("%s -> %s\n", cmd, reply);
     } else {
-        /* 回包被 SELinux 挡下时走这里，命令通常已生效 */
         printf("%s -> (sent, no reply)\n", cmd);
     }
     return 0;

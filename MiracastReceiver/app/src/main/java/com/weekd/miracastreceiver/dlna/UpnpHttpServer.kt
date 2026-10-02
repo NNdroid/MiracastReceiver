@@ -3,6 +3,8 @@ package com.weekd.miracastreceiver.dlna
 import android.content.Context
 import android.content.Intent
 import com.weekd.miracastreceiver.ui.PlayerActivity
+import com.weekd.miracastreceiver.utils.NetworkUtils
+import com.weekd.miracastreceiver.utils.PortUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -11,15 +13,14 @@ import timber.log.Timber
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.OutputStream
+import java.net.Inet6Address
+import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.nio.charset.StandardCharsets
 import java.util.TreeMap
 
-/**
- * UPnP HTTP 服务器
- * 处理设备描述、服务描述和 SOAP 控制请求
- */
+/** UPnP HTTP server for device description and SOAP control. */
 class UpnpHttpServer(
     private val context: Context,
     private val renderer: DlnaMediaRenderer,
@@ -42,16 +43,12 @@ class UpnpHttpServer(
 
         serverJob = scope.launch {
             try {
-                serverSocket = ServerSocket(port)
-                Timber.i("UPnP HTTP server started on port $port")
+                serverSocket = PortUtils.bindFixedServerSocket(port)
+                Timber.i("UPnP HTTP server started dual-stack on port $port")
 
                 while (serverSocket?.isClosed == false) {
                     val client = serverSocket?.accept()
-                    if (client != null) {
-                        launch {
-                            handleClient(client)
-                        }
-                    }
+                    if (client != null) launch { handleClient(client) }
                 }
             } catch (e: Exception) {
                 Timber.e(e, "UPnP HTTP server error")
@@ -85,8 +82,6 @@ class UpnpHttpServer(
                     return
                 }
 
-                // HTTP header names are case-insensitive. A case-insensitive map also preserves
-                // compatibility with the existing SOAPAction lookups below.
                 val headers = TreeMap<String, String>(String.CASE_INSENSITIVE_ORDER)
                 var headerBytes = 0
 
@@ -106,15 +101,10 @@ class UpnpHttpServer(
                         sendHttpError(output, 400, "Bad Request")
                         return
                     }
-                    val key = line.substring(0, index).trim()
-                    val value = line.substring(index + 1).trim()
-                    headers[key] = value
+                    headers[line.substring(0, index).trim()] = line.substring(index + 1).trim()
                 }
 
                 if (headers["Transfer-Encoding"]?.contains("chunked", ignoreCase = true) == true) {
-                    // UPnP control requests are expected to provide Content-Length. Explicitly
-                    // reject an unsupported framing mode instead of accidentally parsing an empty
-                    // or truncated SOAP body.
                     sendHttpError(output, 400, "Chunked Request Body Not Supported")
                     return
                 }
@@ -135,21 +125,16 @@ class UpnpHttpServer(
                     output.flush()
                 }
 
-                // Content-Length is a byte count, so read the raw stream exactly. The previous
-                // BufferedReader.read(...) call could legally return a partial SOAP body when TCP
-                // split the request across packets.
                 val body = if (contentLength > 0) {
                     String(readExact(input, contentLength), StandardCharsets.UTF_8)
-                } else {
-                    ""
-                }
+                } else ""
 
                 val method = parts[0]
                 val path = parts[1].substringBefore('?')
-                Timber.d("UPnP $method $path")
+                Timber.d("UPnP $method $path from ${client.inetAddress.hostAddress}")
 
                 when {
-                    path == "/device.xml" -> sendDeviceDescription(output)
+                    path == "/device.xml" -> sendDeviceDescription(output, client.inetAddress)
                     path == "/service/ConnectionManager.xml" -> sendConnectionManagerScpd(output)
                     path == "/service/AVTransport.xml" -> sendAvTransportScpd(output)
                     path == "/service/RenderingControl.xml" -> sendRenderingControlScpd(output)
@@ -168,24 +153,20 @@ class UpnpHttpServer(
     private fun readHttpLine(input: BufferedInputStream, maxBytes: Int): String? {
         val buffer = ByteArrayOutputStream()
         var previous = -1
-
         while (buffer.size() <= maxBytes) {
             val current = input.read()
             if (current == -1) {
                 return if (buffer.size() == 0) null
                 else String(buffer.toByteArray(), StandardCharsets.ISO_8859_1)
             }
-
             if (previous == '\r'.code && current == '\n'.code) {
                 val bytes = buffer.toByteArray()
                 val length = (bytes.size - 1).coerceAtLeast(0)
                 return String(bytes, 0, length, StandardCharsets.ISO_8859_1)
             }
-
             buffer.write(current)
             previous = current
         }
-
         throw IllegalArgumentException("HTTP line exceeds $maxBytes bytes")
     }
 
@@ -219,8 +200,15 @@ class UpnpHttpServer(
         output.flush()
     }
 
-    private fun sendDeviceDescription(output: OutputStream) {
-        val baseUrl = "http://$localIp:$port"
+    /** Keep all absolute URLs in the device description on the same family used by the client. */
+    private fun sendDeviceDescription(output: OutputStream, remoteAddress: InetAddress) {
+        val addresses = NetworkUtils.getLanAddresses()
+        val address = if (remoteAddress is Inet6Address) {
+            addresses.ipv6 ?: addresses.ipv4 ?: localIp
+        } else {
+            addresses.ipv4 ?: addresses.ipv6 ?: localIp
+        }
+        val baseUrl = NetworkUtils.buildHttpUrl(address, port, "/").removeSuffix("/")
         val xml = DlnaXmlBuilder.buildDeviceDescription(
             deviceUuid, deviceName, manufacturer, modelName, baseUrl
         )
@@ -243,7 +231,6 @@ class UpnpHttpServer(
         val action = SoapParser.extractAction(headers["SOAPACTION"] ?: headers["SOAPAction"])
         Timber.i("AVTransport action: $action")
 
-        // 调试：打印完整请求体，帮助排查 Emby 的格式
         if (action == "SetAVTransportURI") {
             Timber.d("SetAVTransportURI body (first 1000 chars): ${body.take(1000)}")
         }
@@ -252,27 +239,16 @@ class UpnpHttpServer(
             "SetAVTransportURI" -> {
                 val uri = SoapParser.extractTagValue(body, "CurrentURI")
                 val metadata = SoapParser.extractTagValue(body, "CurrentURIMetaData")
-
-                // 如果 URI 为空，记录错误并尝试更宽松的解析
                 if (uri.isBlank()) {
                     Timber.e("SetAVTransportURI: Empty URI! Trying fallback parsing...")
                     Timber.e("Request body: $body")
-
-                    // 尝试其他可能的标签名
                     val fallbackUri = listOf("URI", "Url", "MediaUri", "CurrentUri").firstNotNullOfOrNull { tag ->
                         val value = SoapParser.extractTagValue(body, tag)
                         if (value.isNotBlank()) value else null
                     } ?: ""
-
-                    if (fallbackUri.isNotBlank()) {
-                        Timber.i("Found URI via fallback: $fallbackUri")
-                        renderer.setAVTransportURI(fallbackUri, metadata)
-                    } else {
-                        renderer.setAVTransportURI(uri, metadata)
-                    }
-                } else {
-                    renderer.setAVTransportURI(uri, metadata)
-                }
+                    if (fallbackUri.isNotBlank()) renderer.setAVTransportURI(fallbackUri, metadata)
+                    else renderer.setAVTransportURI(uri, metadata)
+                } else renderer.setAVTransportURI(uri, metadata)
                 buildSoapResponse(action, "")
             }
             "SetNextAVTransportURI" -> {
@@ -282,9 +258,7 @@ class UpnpHttpServer(
             }
             "Play" -> {
                 val speed = extractSpeed(body)
-                if (speed.isNotBlank()) {
-                    renderer.setPlaybackSpeed(speed)
-                }
+                if (speed.isNotBlank()) renderer.setPlaybackSpeed(speed)
                 renderer.play()
                 buildSoapResponse(action, "")
             }
@@ -294,9 +268,7 @@ class UpnpHttpServer(
                 if (speed.isNotBlank()) {
                     renderer.setPlaybackSpeed(speed)
                     buildSoapResponse(action, "")
-                } else {
-                    buildSoapFault("402", "Invalid Args")
-                }
+                } else buildSoapFault("402", "Invalid Args")
             }
             "Pause" -> {
                 renderer.pause()
@@ -349,10 +321,7 @@ class UpnpHttpServer(
                 """.trimIndent()
                 buildSoapResponse(action, content)
             }
-            "GetCurrentTransportActions" -> {
-                val content = "<Actions>Play,Pause,Stop,Seek</Actions>"
-                buildSoapResponse(action, content)
-            }
+            "GetCurrentTransportActions" -> buildSoapResponse(action, "<Actions>Play,Pause,Stop,Seek</Actions>")
             "GetTransportSettings" -> {
                 val content = """
                     <PlayMode>NORMAL</PlayMode>
@@ -360,20 +329,15 @@ class UpnpHttpServer(
                 """.trimIndent()
                 buildSoapResponse(action, content)
             }
-            "X_GetFeatureList" -> {
-                // 一些客户端请求扩展特性
-                buildSoapResponse(action, "<FeatureList></FeatureList>")
-            }
+            "X_GetFeatureList" -> buildSoapResponse(action, "<FeatureList></FeatureList>")
             else -> buildSoapFault("401", "Invalid Action")
         }
-
         sendSoapResponse(output, response)
     }
 
     private fun handleRenderingControl(output: OutputStream, body: String, headers: Map<String, String>) {
         val action = SoapParser.extractAction(headers["SOAPACTION"] ?: headers["SOAPAction"])
         Timber.i("RenderingControl action: $action")
-
         val response = when (action) {
             "GetVolume" -> {
                 val state = renderer.getState()
@@ -396,14 +360,12 @@ class UpnpHttpServer(
             }
             else -> buildSoapFault("401", "Invalid Action")
         }
-
         sendSoapResponse(output, response)
     }
 
     private fun handleConnectionManager(output: OutputStream, body: String, headers: Map<String, String>) {
         val action = SoapParser.extractAction(headers["SOAPACTION"] ?: headers["SOAPAction"])
         Timber.i("ConnectionManager action: $action")
-
         val response = when (action) {
             "GetProtocolInfo" -> {
                 val content = """
@@ -412,9 +374,7 @@ class UpnpHttpServer(
                 """.trimIndent()
                 buildSoapResponse(action, content)
             }
-            "GetCurrentConnectionIDs" -> {
-                buildSoapResponse(action, "<ConnectionIDs>0</ConnectionIDs>")
-            }
+            "GetCurrentConnectionIDs" -> buildSoapResponse(action, "<ConnectionIDs>0</ConnectionIDs>")
             "GetCurrentConnectionInfo" -> {
                 val content = """
                     <RcsID>0</RcsID>
@@ -429,14 +389,11 @@ class UpnpHttpServer(
             }
             else -> buildSoapFault("401", "Invalid Action")
         }
-
         sendSoapResponse(output, response)
     }
 
     private fun handleEvent(output: OutputStream) {
-        // 简化实现：返回 200 OK
-        val response = "HTTP/1.1 200 OK\r\n\r\n"
-        output.write(response.toByteArray())
+        output.write("HTTP/1.1 200 OK\r\n\r\n".toByteArray())
         output.flush()
     }
 
@@ -493,31 +450,22 @@ class UpnpHttpServer(
     }
 
     private fun sendNotFound(output: OutputStream) {
-        val response = "HTTP/1.1 404 Not Found\r\n\r\n"
-        output.write(response.toByteArray())
+        output.write("HTTP/1.1 404 Not Found\r\n\r\n".toByteArray())
         output.flush()
     }
 
-    private fun formatSpeed(speed: Float): String {
-        return if (speed == 1f) "1" else speed.toString()
-    }
+    private fun formatSpeed(speed: Float): String = if (speed == 1f) "1" else speed.toString()
 
     private fun extractSpeed(body: String): String {
         val tagNames = listOf(
-            "Speed",
-            "DesiredSpeed",
-            "Rate",
-            "DesiredRate",
-            "PlaybackSpeed",
-            "TransportPlaySpeed",
-            "CurrentSpeed"
+            "Speed", "DesiredSpeed", "Rate", "DesiredRate", "PlaybackSpeed",
+            "TransportPlaySpeed", "CurrentSpeed"
         )
         for (tag in tagNames) {
             val value = SoapParser.extractTagValue(body, tag)
             if (value.isNotBlank()) return normalizeSpeed(value)
         }
 
-        // 兜底：有些客户端会把倍速放在非标准字段或属性里
         val regexes = listOf(
             Regex("(?i)<[^>]*(?:speed|rate)[^>]*>([^<]+)</[^>]+>"),
             Regex("(?i)(?:speed|rate)\\s*=\\s*[\"']?([0-9.]+)"),

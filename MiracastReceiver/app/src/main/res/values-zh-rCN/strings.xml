@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Miracast Receiver</string>
+    <string name="tv_subtitle">Android TV 后台投屏接收器 · AirPlay / DLNA / Miracast</string>
+    <string name="device_name">智能电视</string>
+    <string name="waiting_connection">等待投屏连接</string>
+    <string name="waiting_network">等待网络</string>
+    <string name="device_ip">设备 IP: %s</string>
+    <string name="device_info">设备信息</string>
+    <string name="connection_code">%s</string>
+    <string name="connection_code_label">连接码</string>
+    <string name="how_to_connect">投屏方法</string>
+    <string name="connect_instruction">手机 / 平板：在 AirPlay 或 DLNA 设备列表中选择这台电视。\nWindows：按 Win + K，选择本机 Miracast 设备。\n应用退回桌面或从最近任务移除后，接收服务仍会继续运行。</string>
+    <string name="receiver_online">接收器在线</string>
+    <string name="work_mode">工作模式</string>
+    <string name="always_ready_mode">后台常驻 · 随时可投</string>
+    <string name="webui_quick_access">WEBUI 快速访问</string>
+    <string name="webui_scan_direct">手机扫码直达 · 自动完成 Token 登录</string>
+    <string name="webui_fragment_security">认证信息使用 URL #fragment，仅由浏览器读取，不会发送到 WebUI HTTP 服务。</string>
+    <string name="webui_qr_description">扫码打开 WebUI</string>
+    <string name="system_capabilities">系统能力</string>
+    <string name="receiver_protocols">接收协议</string>
+    <string name="webui_lan_management">WebUI 局域网管理</string>
+    <string name="cast_help_short">iPhone / iPad：AirPlay 屏幕镜像  ·  Android 视频 App：DLNA  ·  Windows：Win + K Miracast</string>
+    <string name="receiver_status">接收状态</string><string name="background_mode">后台常驻</string><string name="privileged_status">系统增强</string>
+    <string name="root_status_checking">Magisk Root · 检测中…</string><string name="shizuku_status_checking">Shizuku · 检测中…</string><string name="overlay_status_checking">后台弹出 · 检测中…</string><string name="boot_status_checking">开机兜底 · 检测中…</string>
+    <string name="optimize_background">优化后台运行</string><string name="restart_receiver">重新启动接收服务</string><string name="remote_hint">使用遥控器方向键移动焦点，按确认键操作</string>
+    <string name="shizuku_granted_optimizing">Shizuku 已授权，正在优化后台运行</string><string name="shizuku_denied">Shizuku 授权被拒绝</string>
+    <string name="webui_disabled">WebUI 已关闭</string><string name="webui_waiting_network">WebUI 等待网络</string><string name="webui_service_disabled">局域网管理服务未启用</string>
+    <string name="webui_port_fallback">实际 %1$d · 首选 %2$d 被占用，已临时回退</string><string name="webui_port_preferred">实际 %1$d · 使用首选端口</string>
+    <string name="webui_token_auth_off">扫码直达 · Token 验证已关闭</string><string name="webui_token_embedded">Token 已嵌入二维码 · %1$s…%2$s</string>
+    <string name="wifi_direct_permission_denied">未授予 Wi-Fi Direct 权限，Miracast 不可用</string>
+    <string name="overlay_dialog_title">允许后台自动显示投屏画面</string><string name="overlay_dialog_message">应用退出到 Android TV 桌面后接收服务仍会运行。为了在收到投屏时自动切到播放器，请允许“显示在其他应用上层”。Magisk Root / Shizuku 优化成功时通常会自动配置。</string>
+    <string name="go_to_settings">去设置</string><string name="later">稍后</string><string name="overlay_settings_unavailable">此电视没有悬浮窗设置页，可使用 Root/Shizuku 自动配置</string>
+    <string name="config_applied">%s 配置已应用</string><string name="receiver_restarted">投屏接收服务已重新启动</string>
+    <string name="optimize_done_magisk">%s 优化完成，Magisk 开机兜底已安装</string><string name="optimize_done">%s 后台优化完成</string><string name="optimize_android_fallback">未获得 Root/Shizuku 权限，将使用 Android 标准后台模式</string><string name="optimize_partial">后台优化未完全成功，请检查授权</string>
+    <string name="root_magisk_authorized">● Magisk Root · 已授权</string><string name="root_authorized">● Root · 已授权</string><string name="root_unavailable">○ Root · 不可用</string>
+    <string name="shizuku_android7">○ Shizuku · Android 7+ 可用</string><string name="shizuku_authorized">● Shizuku · 已连接并授权</string><string name="shizuku_waiting_auth">● Shizuku · 已连接，等待授权</string><string name="shizuku_not_connected">○ Shizuku · 未连接</string>
+    <string name="overlay_allowed">● 后台弹出 · 已允许</string><string name="overlay_needs_permission">○ 后台弹出 · 需要授权</string>
+    <string name="boot_receiver_off">○ 开机接收 · 已关闭</string><string name="boot_receiver_magisk">● 开机接收 · BootReceiver + Magisk service.d</string><string name="boot_receiver_android">● 开机接收 · Android BootReceiver</string><string name="authorize_shizuku_optimize">授权 Shizuku 并优化</string>
+    <string name="connect_request">投屏连接请求</string><string name="device_request">设备 %s 请求投屏</string><string name="allow">允许</string><string name="deny">拒绝</string><string name="remember_device">记住此设备</string>
+    <string name="connected">已连接</string><string name="playing">正在播放</string><string name="buffering">正在缓冲…</string><string name="paused">已暂停</string><string name="playback_finished">播放完成</string><string name="disconnect">断开连接</string><string name="pause">暂停</string><string name="resume">继续</string><string name="stop">停止</string><string name="more">更多</string>
+    <string name="video_info">视频信息</string><string name="hide_video_info">关闭视频信息</string><string name="quality">画质</string><string name="playback_speed">播放速度（%s）</string><string name="subtitles">字幕</string><string name="screen_orientation">屏幕方向</string><string name="subtitles_auto_hint">字幕切换将随媒体字幕轨自动支持</string>
+    <string name="quality_title">选择画质</string><string name="quality_auto">自动</string><string name="quality_480">流畅 480p</string><string name="quality_720">高清 720p</string><string name="quality_1080">超清 1080p</string><string name="quality_original">原画</string><string name="quality_auto_status">画质：自动</string><string name="quality_status">画质：%dp</string><string name="playback_speed_status">播放速度：%s</string>
+    <string name="playback_error_detail">播放错误: %s</string><string name="image_error_detail">图片加载错误: %s</string><string name="displaying_image">正在显示图片</string><string name="image_slideshow_paused">图片轮播已暂停</string>
+    <string name="airplay_mirror_title">iPhone 屏幕镜像</string><string name="airplay_receiving">正在接收 iPhone 屏幕…</string><string name="airplay_waiting">等待 AirPlay 显示画面…</string><string name="miracast_title">Windows 无线显示器</string><string name="miracast_receiving">正在接收 Windows 屏幕…</string><string name="miracast_waiting">等待 Windows 画面…</string>
+    <string name="stream_info_title">视频信息</string><string name="stream_source_resolution">源分辨率</string><string name="stream_display_resolution">显示分辨率</string><string name="stream_codec">视频编码</string><string name="stream_fps">帧率</string><string name="stream_bitrate">码率</string><string name="stream_speed">网速</string>
+    <string name="url_player_default_title">HTTP 媒体</string><string name="url_player_invalid_request">无效的媒体请求</string><string name="url_player_retrying">播放失败，%1$d 秒后重试（%2$d/%3$d）…</string><string name="url_player_network_recovered">网络已恢复，正在重试…</string><string name="url_player_error">无法播放此 URL：%s</string>
+    <string name="settings">设置</string><string name="device_name_setting">设备名称</string><string name="require_confirmation">需要连接确认</string><string name="enable_pin">启用 PIN 码</string><string name="max_resolution">最大分辨率</string><string name="max_framerate">最大帧率</string><string name="auto_start_on_boot">开机自动启动接收服务</string><string name="auto_start_on_boot_hint">开启后同时保留 Android 开机广播与 Magisk service.d 兜底。电视启动后无需手动打开本应用。</string><string name="network_diagnostics">网络诊断</string><string name="export_logs">导出日志</string>
+    <string name="error_network">网络错误</string><string name="error_connection_failed">连接失败</string><string name="error_playback">播放错误</string><string name="error_unknown">未知错误</string>
+</resources>

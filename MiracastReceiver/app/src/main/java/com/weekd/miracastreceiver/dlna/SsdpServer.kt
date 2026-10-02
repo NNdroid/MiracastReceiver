@@ -207,13 +207,26 @@ class SsdpServer(
         val interfaces = multicastInterfaces()
 
         addresses.ipv4?.let { localAddress ->
-            interfaces.filter { interfaceHasAddress(it, localAddress) || interfaceHasFamily(it, false) }
-                .forEach { iface -> sendNotificationOnInterface(nts, SSDP_IPV4, localAddress, "$SSDP_IPV4:$SSDP_PORT", iface) }
+            interfacesForAddress(interfaces, localAddress, ipv6 = false).forEach { iface ->
+                sendNotificationOnInterface(nts, SSDP_IPV4, localAddress, "$SSDP_IPV4:$SSDP_PORT", iface)
+            }
         }
         addresses.ipv6?.let { localAddress ->
-            interfaces.filter { interfaceHasAddress(it, localAddress) || interfaceHasFamily(it, true) }
-                .forEach { iface -> sendNotificationOnInterface(nts, SSDP_IPV6, localAddress, "[$SSDP_IPV6]:$SSDP_PORT", iface) }
+            interfacesForAddress(interfaces, localAddress, ipv6 = true).forEach { iface ->
+                sendNotificationOnInterface(nts, SSDP_IPV6, localAddress, "[$SSDP_IPV6]:$SSDP_PORT", iface)
+            }
         }
+    }
+
+    /** Prefer the interface that actually owns LOCATION; only fall back by family if ownership
+     * cannot be resolved. This prevents advertising an eth0 URL out wlan0 (or vice versa). */
+    private fun interfacesForAddress(
+        interfaces: List<NetworkInterface>,
+        localAddress: String,
+        ipv6: Boolean
+    ): List<NetworkInterface> {
+        val exact = interfaces.filter { interfaceHasAddress(it, localAddress) }
+        return if (exact.isNotEmpty()) exact else interfaces.filter { interfaceHasFamily(it, ipv6) }
     }
 
     private fun sendNotificationOnInterface(
@@ -253,8 +266,7 @@ class SsdpServer(
     private fun multicastInterfaces(): List<NetworkInterface> =
         NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
             .filter { iface ->
-                runCatching { iface.isUp && !iface.isLoopback && iface.supportsMulticast() }.getOrDefault(false)
-            }
+                runCatching { iface.isUp && !iface.isLoopback && iface.supportsMulticast() }.getOrDefault(false) }
             .filterNot { iface ->
                 val n = iface.name.lowercase()
                 n.startsWith("tun") || n.startsWith("tap") || n.startsWith("wg") ||

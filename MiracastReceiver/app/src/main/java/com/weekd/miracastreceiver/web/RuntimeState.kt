@@ -1,6 +1,7 @@
 package com.weekd.miracastreceiver.web
 
 import com.weekd.miracastreceiver.airplay.VideoDecoder
+import com.weekd.miracastreceiver.cast.GoogleCastReceiver
 import java.util.concurrent.atomic.AtomicReference
 
 /** Runtime snapshot shared by the Android TV UI and WebUI. */
@@ -41,7 +42,10 @@ object RuntimeState {
         while (true) {
             val current = playbackRef.get()
             val next = transform(current)
-            if (playbackRef.compareAndSet(current, next)) return
+            if (playbackRef.compareAndSet(current, next)) {
+                GoogleCastReceiver.syncPlayback(next)
+                return
+            }
         }
     }
 
@@ -77,7 +81,9 @@ object RuntimeState {
         set(value) = updatePlayback { it.copy(retryAttempt = value) }
 
     fun resetPlayback() {
-        playbackRef.set(PlaybackSnapshot())
+        val reset = PlaybackSnapshot()
+        playbackRef.set(reset)
+        GoogleCastReceiver.syncPlayback(reset)
     }
 
     fun decoderName(): String = VideoDecoder.lastDecoderName

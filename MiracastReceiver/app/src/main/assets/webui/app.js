@@ -61,9 +61,10 @@ function fmtDuration(ms){
   const m=Math.floor(s/60), h=Math.floor(m/60);
   return h ? `${h}h ${m%60}m` : `${m}m ${s%60}s`;
 }
-function hostWithPort(port){
+function hostWithPort(port, includeAuth=true){
   const host = location.hostname.includes(':') ? `[${location.hostname}]` : location.hostname;
-  return `${location.protocol}//${host}:${port}/`;
+  const base = `${location.protocol}//${host}:${port}/`;
+  return includeAuth && token ? `${base}#token=${encodeURIComponent(token)}` : base;
 }
 
 async function login(){
@@ -110,8 +111,8 @@ async function refreshStatus(){
     $('runtimePortInput').value=runtimePort || '';
     $('portMode').textContent=s.webui?.fallback ? `自动备用 · 首选 ${preferredPort}` : `WebUI · ${runtimePort}`;
     $('portNotice').textContent=s.webui?.fallback
-      ? `首选端口 ${preferredPort} 被占用，已自动监听 ${runtimePort}`
-      : `当前监听 ${runtimePort}；端口冲突时会自动选择备用端口。`;
+      ? `首选端口 ${preferredPort} 被占用，当前临时监听 ${runtimePort}`
+      : `当前监听 ${runtimePort}；端口冲突时会临时选择备用端口。`;
 
     $('serviceState').textContent=s.service.running ? '● 接收服务运行中' : '接收服务已停止';
     $('serviceUptime').textContent=`运行 ${fmtDuration(s.service.uptimeMs)}`;
@@ -157,8 +158,8 @@ async function loadConfig(){
   $('webUiPort').value=c.webUiPort;
   $('runtimePortInput').value=c.webUiRuntimePort || location.port || c.webUiPort;
   $('portNotice').textContent=c.webUiFallbackActive
-    ? `当前使用自动备用端口 ${c.webUiRuntimePort}`
-    : `默认 18090；被占用时自动选择并保存一个可用高位端口。`;
+    ? `首选端口 ${c.webUiPort} 被占用；当前临时使用 ${c.webUiRuntimePort}`
+    : `首选端口 ${c.webUiPort || 18090}；被占用时临时选择可用高位端口，首选配置保持不变。`;
   $('dlnaState').textContent=boolText(c.dlnaEnabled);
   configLoaded=true;
 }
@@ -187,7 +188,7 @@ async function saveConfig(e){
   const oldPort = Number(location.port || 80);
   try {
     const result=await api('/api/config',{method:'POST',body:JSON.stringify(next)});
-    const selectedPort=Number(result.config?.webUiPort || next.webUiPort || oldPort);
+    const reconnectPort=Number(result.reconnectPort || result.config?.webUiRuntimePort || next.webUiPort || oldPort);
     if (!next.webUiEnabled) {
       toast('配置已保存，WebUI 已关闭；需要重新开启后再访问');
       $('connectionBadge').textContent='WebUI 已关闭';
@@ -195,13 +196,13 @@ async function saveConfig(e){
       return;
     }
 
-    if(selectedPort!==next.webUiPort){
-      toast(`端口 ${next.webUiPort} 已被占用，自动切换到 ${selectedPort}`);
+    if(reconnectPort!==next.webUiPort){
+      toast(`首选端口 ${next.webUiPort} 被占用，继续使用临时端口 ${reconnectPort}`);
     }else{
       toast('配置已保存，接收服务正在重载');
     }
     setTimeout(()=>{
-      if (selectedPort !== oldPort) location.href = hostWithPort(selectedPort);
+      if (reconnectPort !== oldPort) location.href = hostWithPort(reconnectPort, true);
       else location.reload();
     }, 1300);
   } catch(e){ toast(`保存失败：${e.message}`); }

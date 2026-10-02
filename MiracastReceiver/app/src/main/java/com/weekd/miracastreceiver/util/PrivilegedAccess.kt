@@ -3,6 +3,7 @@ package com.weekd.miracastreceiver.util
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.SystemClock
 import rikka.shizuku.Shizuku
 import timber.log.Timber
 import java.io.File
@@ -23,6 +24,11 @@ object PrivilegedAccess {
     private const val MAGISK_DIR = "/data/adb/magisk"
     private const val MAGISK_SERVICE_DIR = "/data/adb/service.d"
     private const val MAGISK_BOOT_SCRIPT = "$MAGISK_SERVICE_DIR/99-miracast-receiver.sh"
+    private const val STATUS_CACHE_TTL_MS = 10_000L
+
+    private val statusLock = Any()
+    @Volatile private var cachedStatus: Status? = null
+    @Volatile private var cachedStatusAtMs: Long = 0L
 
     data class CommandResult(
         val success: Boolean,
@@ -47,13 +53,39 @@ object PrivilegedAccess {
         val success: Boolean get() = succeeded > 0
     }
 
+    /**
+     * Status is polled frequently by the WebUI. Cache it briefly so an open dashboard does not
+     * spawn several `su` processes every two seconds on the TV.
+     */
     fun getStatus(context: Context): Status {
-        val root = isRootAvailable()
-        val magisk = root && runRoot("test -d $MAGISK_DIR").success
-        val shizukuAlive = isShizukuAlive()
-        val shizukuAuthorized = shizukuAlive && isShizukuAuthorized()
-        val bootScript = root && runRoot("test -x $MAGISK_BOOT_SCRIPT").success
-        return Status(root, magisk, shizukuAlive, shizukuAuthorized, bootScript)
+        val now = SystemClock.elapsedRealtime()
+        cachedStatus?.let { cached ->
+            if (now - cachedStatusAtMs < STATUS_CACHE_TTL_MS) return cached
+        }
+
+        synchronized(statusLock) {
+            val secondNow = SystemClock.elapsedRealtime()
+            cachedStatus?.let { cached ->
+                if (secondNow - cachedStatusAtMs < STATUS_CACHE_TTL_MS) return cached
+            }
+
+            val root = isRootAvailable()
+            val magisk = root && runRoot("test -d $MAGISK_DIR").success
+            val shizukuAlive = isShizukuAlive()
+            val shizukuAuthorized = shizukuAlive && isShizukuAuthorized()
+            val bootScript = root && runRoot("test -x $MAGISK_BOOT_SCRIPT").success
+            return Status(root, magisk, shizukuAlive, shizukuAuthorized, bootScript).also {
+                cachedStatus = it
+                cachedStatusAtMs = secondNow
+            }
+        }
+    }
+
+    fun invalidateStatusCache() {
+        synchronized(statusLock) {
+            cachedStatus = null
+            cachedStatusAtMs = 0L
+        }
     }
 
     fun isRootAvailable(): Boolean = runRoot("id").success
@@ -92,10 +124,10 @@ object PrivilegedAccess {
         }
 
         if (!root && !shizuku) {
+            invalidateStatusCache()
             return BootstrapResult(channel, 0, 0, false)
         }
 
-        // Not every app-op exists on every Android release. Treat each command independently.
         val commands = listOf(
             "cmd deviceidle whitelist +$pkg",
             "cmd appops set $pkg RUN_IN_BACKGROUND allow",
@@ -119,6 +151,7 @@ object PrivilegedAccess {
             root && runRoot("test -x $MAGISK_BOOT_SCRIPT").success
         }
 
+        invalidateStatusCache()
         return BootstrapResult(channel, succeeded, commands.size, bootInstalled)
     }
 
@@ -160,12 +193,15 @@ object PrivilegedAccess {
             false
         } finally {
             temp.delete()
+            invalidateStatusCache()
         }
     }
 
     fun removeMagiskBootScript(): Boolean {
         if (!isRootAvailable()) return false
-        return runRoot("rm -f ${shellQuote(MAGISK_BOOT_SCRIPT)}").success
+        return runRoot("rm -f ${shellQuote(MAGISK_BOOT_SCRIPT)}").success.also {
+            invalidateStatusCache()
+        }
     }
 
     private fun runRoot(command: String): CommandResult = try {

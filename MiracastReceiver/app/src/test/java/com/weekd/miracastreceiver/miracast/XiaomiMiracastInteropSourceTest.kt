@@ -9,6 +9,7 @@ class XiaomiMiracastInteropSourceTest {
     private val wifiDirect = File("src/main/java/com/weekd/miracastreceiver/miracast/WifiDirectManager.kt").readText()
     private val server = File("src/main/java/com/weekd/miracastreceiver/miracast/WfdServer.kt").readText()
     private val session = File("src/main/java/com/weekd/miracastreceiver/miracast/WfdSessionHandler.kt").readText()
+    private val rootHelper = File("src/main/java/com/weekd/miracastreceiver/miracast/WfdRootHelper.kt").readText()
 
     @Test
     fun sinkDoesNotForceAutonomousGroupOwnerAtStartup() {
@@ -23,6 +24,16 @@ class XiaomiMiracastInteropSourceTest {
         assertTrue(server.contains("WfdSourceHint.snapshot()"))
         assertTrue(server.contains("hint.controlPort"))
         assertTrue(server.contains("hint.ipAddress"))
+        assertTrue(server.contains("discoverSourceControlPort"))
+        assertTrue(server.contains("supplicant-peer-ie"))
+    }
+
+    @Test
+    fun sinkAdvertisesNoRtspServerAndReadsPeerWfdIe() {
+        assertTrue(rootHelper.contains("controlPort: Int = 0"))
+        assertTrue(rootHelper.contains("P2P_PEER FIRST"))
+        assertTrue(rootHelper.contains("parsePeerControlPort"))
+        assertFalse(rootHelper.contains("fun advertiseSink(context: Context, controlPort: Int = 7236)"))
     }
 
     @Test

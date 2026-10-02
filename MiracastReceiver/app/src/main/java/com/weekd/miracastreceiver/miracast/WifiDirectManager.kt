@@ -13,13 +13,7 @@ import android.os.Looper
 import androidx.core.content.ContextCompat
 import timber.log.Timber
 
-/**
- * Wi-Fi Direct manager used by the Miracast sink.
- *
- * Miracast sources discover sinks from the WFD IE carried by P2P discovery frames. A rooted TV
- * therefore prepares the WFD IE and Extended Listen state before the framework creates/restores
- * the P2P group. Framework peer discovery is also kept active as a non-root/system-app fallback.
- */
+/** Wi-Fi Direct manager used by the Miracast sink. */
 class WifiDirectManager(
     private val context: Context,
     private val deviceName: String
@@ -52,9 +46,9 @@ class WifiDirectManager(
         }
 
         isStarted = true
+        WfdSourceHint.clear()
 
-        // Do root/supplicant work off the main thread. Some SELinux configurations do not return
-        // a reply to the control socket, and waiting here used to stall app/service startup.
+        // Supplicant control can block on some vendor ROMs, so keep it off the main thread.
         Thread({
             val rootAdvertised = runCatching { WfdRootHelper.advertiseSink(appContext) }
                 .onFailure { Timber.w(it, "WFD root advertisement failed") }
@@ -81,18 +75,15 @@ class WifiDirectManager(
 
             frameworkStarted = true
             registerReceiver()
-
-            // System/privileged builds can set this through the framework. Normal APKs will fail
-            // and use the root-assisted supplicant path prepared above.
             setWfdInfo()
-
             registerLocalService()
-            createOrReuseGroup()
-            startPeerDiscovery()
 
-            if (!rootAdvertised) {
-                WfdRootHelper.refreshAdvertisingAsync(appContext)
-            }
+            // Do not create an autonomous GO here. Android/HyperOS Miracast sources are more
+            // interoperable when they can perform normal P2P Group Negotiation. Reuse an already
+            // active group, but remove an empty stale group left by a previous session.
+            prepareForSourceNegotiation()
+
+            if (!rootAdvertised) WfdRootHelper.refreshAdvertisingAsync(appContext)
             Timber.i("Wi-Fi Direct started for Miracast (rootWfd=$rootAdvertised)")
         } catch (e: Exception) {
             frameworkStarted = false
@@ -106,7 +97,7 @@ class WifiDirectManager(
             val wfdInfoClass = Class.forName("android.net.wifi.p2p.WifiP2pWfdInfo")
             val wfdInfo = wfdInfoClass.getDeclaredConstructor().newInstance()
             wfdInfoClass.getMethod("setWfdEnabled", Boolean::class.java).invoke(wfdInfo, true)
-            wfdInfoClass.getMethod("setDeviceType", Int::class.java).invoke(wfdInfo, 1) // PRIMARY_SINK
+            wfdInfoClass.getMethod("setDeviceType", Int::class.java).invoke(wfdInfo, 1)
             wfdInfoClass.getMethod("setSessionAvailable", Boolean::class.java).invoke(wfdInfo, true)
             wfdInfoClass.getMethod("setControlPort", Int::class.java).invoke(wfdInfo, 7236)
             wfdInfoClass.getMethod("setMaxThroughput", Int::class.java).invoke(wfdInfo, 50)
@@ -137,58 +128,92 @@ class WifiDirectManager(
         }
     }
 
-    private fun createOrReuseGroup() {
+    private fun prepareForSourceNegotiation() {
         val p2p = p2pManager() ?: return
         val ch = channel ?: return
         try {
-            p2p.requestGroupInfo(ch) { existing ->
+            p2p.requestGroupInfo(ch) { group ->
                 if (!isStarted) return@requestGroupInfo
-                if (existing != null) {
-                    Timber.i("Reusing P2P group ${existing.networkName}; owner=${existing.isGroupOwner}")
-                    onGroupReady(existing)
-                    return@requestGroupInfo
+                if (group != null && group.clientList.isNotEmpty()) {
+                    Timber.i("Reusing active P2P group ${group.networkName}; owner=${group.isGroupOwner}")
+                    onGroupReady(group)
+                    startPeerDiscovery()
+                } else if (group != null) {
+                    Timber.i("Removing idle P2P group before Miracast source negotiation")
+                    runCatching {
+                        p2p.removeGroup(ch, object : WifiP2pManager.ActionListener {
+                            override fun onSuccess() {
+                                Timber.i("Idle P2P group removed")
+                                startPeerDiscovery()
+                                WfdRootHelper.refreshAdvertisingAsync(appContext)
+                            }
+
+                            override fun onFailure(reason: Int) {
+                                Timber.w("Unable to remove idle P2P group: ${reasonText(reason)}")
+                                startPeerDiscovery()
+                            }
+                        })
+                    }.onFailure {
+                        Timber.w(it, "Exception removing idle P2P group")
+                        startPeerDiscovery()
+                    }
+                } else {
+                    startPeerDiscovery()
                 }
-                createGroup(p2p, ch)
             }
         } catch (e: SecurityException) {
             Timber.w("Cannot query P2P group; missing nearby/location permission")
+            startPeerDiscovery()
         } catch (e: Exception) {
             Timber.w(e, "Unable to query P2P group")
-            createGroup(p2p, ch)
-        }
-    }
-
-    private fun createGroup(p2p: WifiP2pManager, ch: WifiP2pManager.Channel) {
-        try {
-            p2p.createGroup(ch, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() {
-                    Timber.i("Wi-Fi Direct group created")
-                    p2p.requestGroupInfo(ch) { group -> if (group != null) onGroupReady(group) }
-                }
-
-                override fun onFailure(reason: Int) {
-                    Timber.w("P2P createGroup failed: ${reasonText(reason)}")
-                    if (reason == WifiP2pManager.BUSY) {
-                        p2p.requestGroupInfo(ch) { group -> if (group != null) onGroupReady(group) }
-                    }
-                    // Even without an autonomous GO, stay discoverable so a source can negotiate.
-                    startPeerDiscovery()
-                    WfdRootHelper.refreshAdvertisingAsync(appContext)
-                }
-            })
-        } catch (e: SecurityException) {
-            Timber.w("Cannot create P2P group; missing nearby/location permission")
-        } catch (e: Exception) {
-            Timber.w(e, "Exception while creating P2P group")
+            startPeerDiscovery()
         }
     }
 
     private fun onGroupReady(group: WifiP2pGroup) {
-        Timber.i("P2P group ready: ${group.networkName}; owner=${group.isGroupOwner}")
+        Timber.i("P2P group ready: ${group.networkName}; owner=${group.isGroupOwner}; clients=${group.clientList.size}")
         onGroupCreated?.invoke(group)
         setDeviceName(deviceName)
         WfdRootHelper.refreshAdvertisingAsync(appContext)
+        group.clientList.forEach { device ->
+            rememberSourceDevice(device, "group-client")
+        }
         group.clientList.firstOrNull()?.let { onDeviceConnected?.invoke(it) }
+    }
+
+    private fun rememberSourceDevice(device: WifiP2pDevice, reason: String) {
+        val port = extractWfdControlPort(device)
+        Timber.i(
+            "Miracast peer: name=${device.deviceName} address=${device.deviceAddress} " +
+                "status=${device.status} controlPort=${port ?: "unknown"}"
+        )
+        if (port != null) WfdSourceHint.update(controlPort = port, reason = reason)
+    }
+
+    /**
+     * WifiP2pWfdInfo is hidden on many Android releases. Try both the accessor and backing field;
+     * failure is harmless because the WFD default port 7236 remains a fallback.
+     */
+    private fun extractWfdControlPort(device: WifiP2pDevice): Int? {
+        return runCatching {
+            val info = runCatching {
+                device.javaClass.methods
+                    .firstOrNull { it.name == "getWfdInfo" && it.parameterCount == 0 }
+                    ?.invoke(device)
+            }.getOrNull() ?: runCatching {
+                device.javaClass.declaredFields
+                    .firstOrNull { it.name == "wfdInfo" }
+                    ?.apply { isAccessible = true }
+                    ?.get(device)
+            }.getOrNull() ?: return@runCatching null
+
+            val port = info.javaClass.methods
+                .firstOrNull { it.name == "getControlPort" && it.parameterCount == 0 }
+                ?.invoke(info) as? Number
+            port?.toInt()?.takeIf { it in 1..65535 }
+        }.onFailure {
+            Timber.d("Unable to read peer WFD control port: ${it.message}")
+        }.getOrNull()
     }
 
     private fun setDeviceName(name: String) {
@@ -227,11 +252,6 @@ class WifiDirectManager(
         }
     }
 
-    /**
-     * discoverPeers() is not the Miracast discovery mechanism itself, but it makes the framework
-     * P2P state machine cycle through search/listen states. Rooted devices additionally use
-     * P2P_EXT_LISTEN, which is the reliable sink-discoverability path.
-     */
     private fun startPeerDiscovery() {
         val p2p = p2pManager() ?: return
         val ch = channel ?: return
@@ -302,7 +322,17 @@ class WifiDirectManager(
         val p2p = p2pManager() ?: return
         val ch = channel ?: return
         try {
-            p2p.requestPeers(ch) { peers -> Timber.d("P2P peers visible to sink: ${peers.deviceList.size}") }
+            p2p.requestPeers(ch) { peers ->
+                Timber.d("P2P peers visible to sink: ${peers.deviceList.size}")
+                val likelySources = peers.deviceList.sortedBy { device ->
+                    when (device.status) {
+                        WifiP2pDevice.CONNECTED -> 0
+                        WifiP2pDevice.INVITED -> 1
+                        else -> 2
+                    }
+                }
+                likelySources.forEach { rememberSourceDevice(it, "peer-discovery") }
+            }
         } catch (e: SecurityException) {
             Timber.d("requestPeers denied by permission state")
         }
@@ -314,9 +344,17 @@ class WifiDirectManager(
         try {
             p2p.requestConnectionInfo(ch) { info ->
                 if (info.groupFormed) {
-                    Timber.i("P2P connected; owner=${info.isGroupOwner}; GO=${info.groupOwnerAddress?.hostAddress}")
+                    val goIp = info.groupOwnerAddress?.hostAddress
+                    Timber.i("P2P connected; sinkIsOwner=${info.isGroupOwner}; GO=$goIp")
+                    // If the sink is not GO, the group owner is the Miracast Source and this is the
+                    // exact address to dial. If the sink is GO, WfdServer will combine the learned
+                    // control-port hint with a small /24 host scan.
+                    if (!info.isGroupOwner && !goIp.isNullOrBlank()) {
+                        WfdSourceHint.update(ipAddress = goIp, reason = "source-group-owner")
+                    }
                     p2p.requestGroupInfo(ch) { group -> if (group != null) onGroupReady(group) }
                 } else {
+                    WfdSourceHint.clear()
                     onDeviceDisconnected?.invoke()
                     if (isStarted) {
                         WfdRootHelper.refreshAdvertisingAsync(appContext)
@@ -344,6 +382,7 @@ class WifiDirectManager(
             runCatching { p2p.removeGroup(ch, emptyActionListener("remove group")) }
         }
 
+        WfdSourceHint.clear()
         receiver?.let { runCatching { appContext.unregisterReceiver(it) } }
         receiver = null
         channel = null

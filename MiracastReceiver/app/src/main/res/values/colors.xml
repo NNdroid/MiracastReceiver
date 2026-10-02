@@ -1,20 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="primary">#6EA8FF</color>
-    <color name="primary_dark">#315FAD</color>
-    <color name="accent">#45E0A1</color>
-    <color name="background_dark">#070B12</color>
-    <color name="background_card">#111927</color>
-    <color name="background_card_alt">#0D1420</color>
-    <color name="focus_surface">#18352F</color>
-    <color name="divider">#29384C</color>
-    <color name="text_primary">#F7FAFC</color>
-    <color name="text_secondary">#B4C1D1</color>
-    <color name="text_muted">#78889E</color>
-    <color name="success">#45E0A1</color>
-    <color name="warning">#FFC857</color>
-    <color name="error">#FF6B78</color>
-    <color name="blue_soft">#8AB9FF</color>
-    <color name="surface_high">#172236</color>
-    <color name="surface_low">#0A101A</color>
+    <color name="primary">#246BCE</color>
+    <color name="primary_dark">#174C96</color>
+    <color name="accent">#087F5B</color>
+    <color name="background_dark">#F3F7FC</color>
+    <color name="background_card">#FFFFFF</color>
+    <color name="background_card_alt">#F7FAFE</color>
+    <color name="focus_surface">#E7F7F0</color>
+    <color name="divider">#CFDAE8</color>
+    <color name="text_primary">#122033</color>
+    <color name="text_secondary">#42566F</color>
+    <color name="text_muted">#708197</color>
+    <color name="success">#087F5B</color>
+    <color name="warning">#A86100</color>
+    <color name="error">#C93848</color>
+    <color name="blue_soft">#2E6FCA</color>
+    <color name="surface_high">#E8EFF8</color>
+    <color name="surface_low">#F7FAFE</color>
 </resources>

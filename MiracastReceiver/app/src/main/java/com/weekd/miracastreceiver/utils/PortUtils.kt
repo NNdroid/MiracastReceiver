@@ -1,6 +1,7 @@
 package com.weekd.miracastreceiver.utils
 
 import timber.log.Timber
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.security.SecureRandom
@@ -39,9 +40,13 @@ object PortUtils {
     }
 
     /**
-     * Bind to the platform wildcard address instead of the IPv4-only 0.0.0.0 literal. On Android's
-     * dual-stack socket implementation this accepts both IPv4 and IPv6, while remaining compatible
-     * with IPv4-only devices.
+     * Bind the primary WebUI listener explicitly on IPv4 wildcard.
+     *
+     * Android vendor kernels are not consistent about whether an unspecified Java ServerSocket
+     * wildcard becomes IPv4, dual-stack, or IPv6-only. The previous platform-wildcard binding could
+     * therefore make the WebUI unreachable through the IPv4 LAN address shown on the TV. Keep the
+     * management listener deterministic and reachable on 0.0.0.0; a dedicated IPv6 listener can be
+     * layered on separately without risking IPv4 reachability.
      */
     fun bindAvailableServerSocket(
         preferredPort: Int,
@@ -54,7 +59,7 @@ object PortUtils {
         if (fallbackPort != null && fallbackPort in 1024..65535 && fallbackPort !in excludedPorts) candidates += fallbackPort
 
         for (candidate in candidates) {
-            tryBind(candidate, backlog)?.let { socket ->
+            tryBindIpv4(candidate, backlog)?.let { socket ->
                 if (candidate != preferredPort) Timber.w("WebUI preferred port $preferredPort unavailable; reused fallback port $candidate")
                 return socket
             }
@@ -63,7 +68,7 @@ object PortUtils {
         repeat(RANDOM_ATTEMPTS) {
             val candidate = randomHighPort()
             if (candidate !in excludedPorts) {
-                tryBind(candidate, backlog)?.let { socket ->
+                tryBindIpv4(candidate, backlog)?.let { socket ->
                     Timber.w("WebUI preferred port $preferredPort unavailable; bound random port $candidate")
                     return socket
                 }
@@ -73,10 +78,10 @@ object PortUtils {
         repeat(8) {
             val socket = ServerSocket().apply {
                 reuseAddress = true
-                bind(InetSocketAddress(0), backlog)
+                bind(InetSocketAddress(IPV4_WILDCARD, 0), backlog)
             }
             if (socket.localPort !in excludedPorts && socket.localPort >= 1024) {
-                Timber.w("WebUI fell back to kernel-assigned port ${socket.localPort}")
+                Timber.w("WebUI fell back to kernel-assigned IPv4 port ${socket.localPort}")
                 return socket
             }
             socket.close()
@@ -86,15 +91,15 @@ object PortUtils {
 
     fun isTcpPortAvailable(port: Int): Boolean {
         if (port !in 1024..65535) return false
-        return tryBind(port, 1)?.use { true } ?: false
+        return tryBindIpv4(port, 1)?.use { true } ?: false
     }
 
-    private fun tryBind(port: Int, backlog: Int): ServerSocket? {
+    private fun tryBindIpv4(port: Int, backlog: Int): ServerSocket? {
         if (port !in 1024..65535) return null
         return try {
             ServerSocket().apply {
                 reuseAddress = true
-                bind(InetSocketAddress(port), backlog)
+                bind(InetSocketAddress(IPV4_WILDCARD, port), backlog)
             }
         } catch (_: Exception) {
             null
@@ -102,4 +107,6 @@ object PortUtils {
     }
 
     private fun randomHighPort(): Int = RANDOM_PORT_MIN + random.nextInt(RANDOM_PORT_MAX - RANDOM_PORT_MIN + 1)
+
+    private val IPV4_WILDCARD: InetAddress by lazy { InetAddress.getByName("0.0.0.0") }
 }

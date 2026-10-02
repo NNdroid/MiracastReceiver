@@ -11,8 +11,8 @@ android {
         applicationId = "com.weekd.miracastreceiver"
         minSdk = 21
         targetSdk = 36
-        versionCode = 11
-        versionName = "1.4.0"
+        versionCode = 12
+        versionName = "1.5.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -98,6 +98,7 @@ dependencies {
 
     implementation("org.webrtc:google-webrtc:1.0.32006")
     implementation("com.jakewharton.timber:timber:5.0.1")
+    implementation("com.google.zxing:core:3.5.3")
 
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
     implementation("com.googlecode.plist:dd-plist:1.28")

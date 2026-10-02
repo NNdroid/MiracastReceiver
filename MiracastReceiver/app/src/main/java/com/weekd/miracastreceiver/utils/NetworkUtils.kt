@@ -190,7 +190,7 @@ object NetworkUtils {
             for (networkInterface in candidates) {
                 if (runCatching { networkInterface.isLoopback || !networkInterface.isUp }.getOrDefault(true)) continue
                 val mac = runCatching { networkInterface.hardwareAddress }.getOrNull()
-                if (!mac.isNullOrEmpty()) {
+                if (mac != null && mac.isNotEmpty()) {
                     val macAddress = mac.joinToString(":") {
                         String.format("%02X", it.toInt() and 0xFF)
                     }

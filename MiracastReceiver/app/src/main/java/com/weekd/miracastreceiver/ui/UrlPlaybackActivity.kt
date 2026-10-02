@@ -8,6 +8,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.View
 import android.view.WindowManager
 import android.widget.ProgressBar
@@ -22,6 +23,7 @@ import androidx.media3.common.Player
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
@@ -43,6 +45,13 @@ class UrlPlaybackActivity : AppCompatActivity() {
         const val EXTRA_HEADERS_JSON = "url_playback_headers_json"
         private const val MAX_RETRY_ATTEMPTS = 5
         private val RETRY_DELAYS_MS = longArrayOf(1_000L, 2_000L, 4_000L, 8_000L, 16_000L)
+
+        // Fast-start profile for LAN/WebUI playback. Keep enough headroom for bursty HLS/DASH,
+        // but do not make the viewer wait for the large VOD-oriented default startup buffer.
+        private const val MIN_BUFFER_MS = 1_500
+        private const val MAX_BUFFER_MS = 15_000
+        private const val START_BUFFER_MS = 350
+        private const val REBUFFER_MS = 900
     }
 
     private lateinit var playerView: PlayerView
@@ -52,6 +61,7 @@ class UrlPlaybackActivity : AppCompatActivity() {
     private lateinit var bufferingIndicator: ProgressBar
 
     private var player: ExoPlayer? = null
+    private var configuredHeaders: Map<String, String> = emptyMap()
     private var currentUrl = ""
     private var currentTitle = ""
     private var requestHeaders: Map<String, String> = emptyMap()
@@ -60,6 +70,7 @@ class UrlPlaybackActivity : AppCompatActivity() {
     private var progressJob: Job? = null
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
     private var waitingForNetwork = false
+    private var loadStartedAtMs = 0L
 
     private val controlReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -124,76 +135,100 @@ class UrlPlaybackActivity : AppCompatActivity() {
     }
 
     private fun startMedia() {
-        releasePlayer()
-
-        val httpFactory = DefaultHttpDataSource.Factory()
-            .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(10_000)
-            .setReadTimeoutMs(15_000)
-            .setUserAgent(requestHeaders["User-Agent"] ?: "MiracastReceiver/${Build.VERSION.RELEASE}")
-            .setDefaultRequestProperties(requestHeaders.filterKeys { !it.equals("User-Agent", true) })
-        val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
-        val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
-
-        player = ExoPlayer.Builder(this)
-            .setMediaSourceFactory(mediaSourceFactory)
-            .build()
-            .also { exo ->
-                exo.addListener(object : Player.Listener {
-                    override fun onPlaybackStateChanged(playbackState: Int) {
-                        when (playbackState) {
-                            Player.STATE_BUFFERING -> {
-                                bufferingIndicator.visibility = View.VISIBLE
-                                tvStatus.setText(R.string.buffering)
-                                updateSnapshot("BUFFERING")
-                            }
-                            Player.STATE_READY -> {
-                                retryAttempt = 0
-                                waitingForNetwork = false
-                                bufferingIndicator.visibility = View.GONE
-                                tvError.visibility = View.GONE
-                                tvStatus.setText(R.string.playing)
-                                updateSnapshot(if (exo.isPlaying) "PLAYING" else "READY")
-                            }
-                            Player.STATE_ENDED -> {
-                                bufferingIndicator.visibility = View.GONE
-                                tvStatus.setText(R.string.playback_finished)
-                                updateSnapshot("ENDED")
-                            }
-                            Player.STATE_IDLE -> updateSnapshot("IDLE")
-                        }
-                    }
-
-                    override fun onIsPlayingChanged(isPlaying: Boolean) {
-                        if (exo.playbackState == Player.STATE_READY) {
-                            tvStatus.setText(if (isPlaying) R.string.playing else R.string.paused)
-                            updateSnapshot(if (isPlaying) "PLAYING" else "PAUSED")
-                        }
-                    }
-
-                    override fun onPlayerError(error: PlaybackException) {
-                        Timber.w(error, "URL playback error for $currentUrl")
-                        bufferingIndicator.visibility = View.GONE
-                        RuntimeState.playbackError = error.message.orEmpty()
-                        if (isRetryable(error) && retryAttempt < MAX_RETRY_ATTEMPTS) {
-                            scheduleRetry(error)
-                        } else {
-                            showFatalError(error.message ?: getString(R.string.error_unknown))
-                        }
-                    }
-                })
-                playerView.player = exo
-                exo.setMediaItem(createMediaItem(currentUrl))
-                exo.prepare()
-                exo.playWhenReady = true
-            }
-
+        val exo = ensurePlayer()
         tvTitle.text = currentTitle
         tvError.visibility = View.GONE
+        bufferingIndicator.visibility = View.VISIBLE
+        loadStartedAtMs = SystemClock.elapsedRealtime()
+
+        // Reuse the already-created codec/player when only the URL changes. setMediaItem() clears
+        // the previous timeline and prepare() reuses the playback thread/renderers instead of paying
+        // the full ExoPlayer construction cost for every WebUI push.
+        exo.stop()
+        exo.clearMediaItems()
+        exo.setMediaItem(createMediaItem(currentUrl))
+        exo.playWhenReady = true
+        exo.prepare()
+
         RuntimeState.updatePlayback {
             it.copy(state = "BUFFERING", title = currentTitle, uri = currentUrl, source = "WEB_URL", error = "", retryAttempt = 0)
         }
         startProgressUpdates()
+    }
+
+    private fun ensurePlayer(): ExoPlayer {
+        val existing = player
+        if (existing != null && configuredHeaders == requestHeaders) return existing
+
+        releasePlayer()
+        configuredHeaders = requestHeaders.toMap()
+
+        val httpFactory = DefaultHttpDataSource.Factory()
+            .setAllowCrossProtocolRedirects(true)
+            .setConnectTimeoutMs(6_000)
+            .setReadTimeoutMs(12_000)
+            .setUserAgent(requestHeaders["User-Agent"] ?: "MiracastReceiver/${Build.VERSION.RELEASE}")
+            .setDefaultRequestProperties(requestHeaders.filterKeys { !it.equals("User-Agent", true) })
+        val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
+        val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
+        val loadControl = DefaultLoadControl.Builder()
+            .setBufferDurationsMs(MIN_BUFFER_MS, MAX_BUFFER_MS, START_BUFFER_MS, REBUFFER_MS)
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+
+        val created = ExoPlayer.Builder(this)
+            .setMediaSourceFactory(mediaSourceFactory)
+            .setLoadControl(loadControl)
+            .build()
+        created.addListener(object : Player.Listener {
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                when (playbackState) {
+                    Player.STATE_BUFFERING -> {
+                        bufferingIndicator.visibility = View.VISIBLE
+                        tvStatus.setText(R.string.buffering)
+                        updateSnapshot("BUFFERING")
+                    }
+                    Player.STATE_READY -> {
+                        retryAttempt = 0
+                        waitingForNetwork = false
+                        bufferingIndicator.visibility = View.GONE
+                        tvError.visibility = View.GONE
+                        tvStatus.setText(R.string.playing)
+                        val startupMs = if (loadStartedAtMs > 0L) SystemClock.elapsedRealtime() - loadStartedAtMs else -1L
+                        if (startupMs >= 0L) Timber.i("URL playback ready in ${startupMs}ms: $currentUrl")
+                        loadStartedAtMs = 0L
+                        updateSnapshot(if (created.isPlaying) "PLAYING" else "READY")
+                    }
+                    Player.STATE_ENDED -> {
+                        bufferingIndicator.visibility = View.GONE
+                        tvStatus.setText(R.string.playback_finished)
+                        updateSnapshot("ENDED")
+                    }
+                    Player.STATE_IDLE -> updateSnapshot("IDLE")
+                }
+            }
+
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (created.playbackState == Player.STATE_READY) {
+                    tvStatus.setText(if (isPlaying) R.string.playing else R.string.paused)
+                    updateSnapshot(if (isPlaying) "PLAYING" else "PAUSED")
+                }
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                Timber.w(error, "URL playback error for $currentUrl")
+                bufferingIndicator.visibility = View.GONE
+                RuntimeState.playbackError = error.message.orEmpty()
+                if (isRetryable(error) && retryAttempt < MAX_RETRY_ATTEMPTS) {
+                    scheduleRetry(error)
+                } else {
+                    showFatalError(error.message ?: getString(R.string.error_unknown))
+                }
+            }
+        })
+        player = created
+        playerView.player = created
+        return created
     }
 
     private fun createMediaItem(url: String): MediaItem {
@@ -225,9 +260,10 @@ class UrlPlaybackActivity : AppCompatActivity() {
         retryJob = null
         val exo = player ?: return
         waitingForNetwork = false
+        loadStartedAtMs = SystemClock.elapsedRealtime()
         tvStatus.setText(R.string.url_player_network_recovered)
-        exo.prepare()
         exo.playWhenReady = true
+        exo.prepare()
     }
 
     private fun isRetryable(error: PlaybackException): Boolean {
@@ -320,6 +356,7 @@ class UrlPlaybackActivity : AppCompatActivity() {
         playerView.player = null
         player?.release()
         player = null
+        configuredHeaders = emptyMap()
     }
 
     override fun onDestroy() {

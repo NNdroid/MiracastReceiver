@@ -424,12 +424,10 @@ class CastReceiverService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    /** 用户从最近任务里划掉应用时也要断开投屏，否则发送端会以为连接还在。 */
+    /** 用户从最近任务移除应用时，保持后台投屏接收服务继续运行。 */
     override fun onTaskRemoved(rootIntent: Intent?) {
-        Timber.i("Task removed, tearing down cast sessions")
-        if (initialized) shutdownMiracast()
+        Timber.i("Task removed; cast receiver remains active in background")
         super.onTaskRemoved(rootIntent)
-        stopSelf()
     }
 
     override fun onDestroy() {

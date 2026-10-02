@@ -14,6 +14,10 @@ val releaseSigningConfigured = listOf(
     releaseKeyPassword
 ).all { !it.isNullOrBlank() }
 
+val googleCastAppId = providers.gradleProperty("googleCastAppId").orNull
+    ?: System.getenv("GOOGLE_CAST_APP_ID").orEmpty()
+val escapedGoogleCastAppId = googleCastAppId.replace("\\", "\\\\").replace("\"", "\\\"")
+
 android {
     namespace = "com.weekd.miracastreceiver"
     compileSdk = 36
@@ -22,10 +26,11 @@ android {
         applicationId = "com.weekd.miracastreceiver"
         minSdk = 21
         targetSdk = 36
-        versionCode = 38
-        versionName = "1.10.4"
+        versionCode = 39
+        versionName = "1.11.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        buildConfigField("String", "GOOGLE_CAST_APP_ID", "\"$escapedGoogleCastAppId\"")
 
         ndk {
             abiFilters += setOf("armeabi-v7a", "arm64-v8a")
@@ -108,6 +113,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-livedata-ktx:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-process:2.8.7")
+    implementation("androidx.media:media:1.7.0")
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
@@ -119,6 +126,10 @@ dependencies {
     implementation("com.squareup.retrofit2:retrofit:2.11.0")
     implementation("com.squareup.retrofit2:converter-gson:2.11.0")
     implementation("com.google.code.gson:gson:2.11.0")
+
+    // Official Google Cast Connect receiver libraries for Android TV.
+    implementation("com.google.android.gms:play-services-cast-tv:21.1.1")
+    implementation("com.google.android.gms:play-services-cast:22.3.1")
 
     // 1.9+ raises Media3 minSdk to 23. Keep the newest stable line compatible with our minSdk 21.
     val media3Version = "1.8.1"

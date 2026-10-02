@@ -36,7 +36,6 @@ import timber.log.Timber
 class MainActivity : AppCompatActivity() {
 
     private lateinit var deviceInfoProvider: DeviceInfoProvider
-
     private lateinit var tvDeviceName: TextView
     private lateinit var tvDeviceIp: TextView
     private lateinit var tvConnectionCode: TextView
@@ -66,10 +65,10 @@ class MainActivity : AppCompatActivity() {
         if (requestCode != PrivilegedAccess.SHIZUKU_PERMISSION_REQUEST) return@OnRequestPermissionResultListener
         runOnUiThread {
             if (grantResult == PackageManager.PERMISSION_GRANTED) {
-                Toast.makeText(this, "Shizuku 已授权，正在优化后台运行", Toast.LENGTH_SHORT).show()
+                toast(R.string.shizuku_granted_optimizing)
                 performBackgroundOptimization(userInitiated = true)
             } else {
-                Toast.makeText(this, "Shizuku 授权被拒绝", Toast.LENGTH_SHORT).show()
+                toast(R.string.shizuku_denied)
                 refreshPrivilegeStatus()
             }
         }
@@ -77,7 +76,6 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val REQUEST_CODE_PERMISSIONS = 1001
-
         private val WIFI_DIRECT_PERMISSIONS: Array<String>
             get() = if (Build.VERSION.SDK_INT >= 33) {
                 arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
@@ -98,7 +96,8 @@ class MainActivity : AppCompatActivity() {
         deviceInfoProvider = DeviceInfoProvider(this)
         initViews()
         if (AppSettings.isMiracastEnabled(this)) requestWifiDirectPermissions()
-        checkNetworkAndStart()
+        startCastService()
+        updateStatus()
         performBackgroundOptimization(userInitiated = false)
     }
 
@@ -154,7 +153,6 @@ class MainActivity : AppCompatActivity() {
 
         btnOptimizeBackground.setOnClickListener { performBackgroundOptimization(userInitiated = true) }
         btnRestartReceiver.setOnClickListener { restartReceiverService(showToast = true) }
-
         updateIdentityInfo()
         switchAutoStart.post { switchAutoStart.requestFocus() }
     }
@@ -185,24 +183,22 @@ class MainActivity : AppCompatActivity() {
         val fallback = runtimePort != preferredPort
 
         tvWebUiUrl.text = when {
-            !enabled -> "WebUI 已关闭"
-            ip == null -> "WebUI 等待网络"
+            !enabled -> getString(R.string.webui_disabled)
+            ip == null -> getString(R.string.webui_waiting_network)
             else -> "http://$ip:$runtimePort"
         }
         tvWebUiPortStatus.text = when {
-            !enabled -> "局域网管理服务未启用"
-            fallback -> "实际 $runtimePort · 首选 $preferredPort 被占用，已临时回退"
-            else -> "实际 $runtimePort · 使用首选端口"
+            !enabled -> getString(R.string.webui_service_disabled)
+            fallback -> getString(R.string.webui_port_fallback, runtimePort, preferredPort)
+            else -> getString(R.string.webui_port_preferred, runtimePort)
         }
-        tvWebUiPortStatus.setTextColor(
-            ContextCompat.getColor(this, if (fallback) R.color.warning else R.color.text_secondary)
-        )
+        tvWebUiPortStatus.setTextColor(ContextCompat.getColor(this, if (fallback) R.color.warning else R.color.text_secondary))
 
         tvWebUiToken.text = if (!AppSettings.isWebUiAuthRequired(this)) {
-            "扫码直达 · Token 验证已关闭"
+            getString(R.string.webui_token_auth_off)
         } else {
             val token = AppSettings.getOrCreateWebUiToken(this)
-            "Token 已嵌入二维码 · ${token.take(8)}…${token.takeLast(6)}"
+            getString(R.string.webui_token_embedded, token.take(8), token.takeLast(6))
         }
     }
 
@@ -216,21 +212,15 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-    ) {
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != REQUEST_CODE_PERMISSIONS) return
         wifiPermissionPending = false
-
-        val granted = grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }
-        if (granted) {
+        if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
             startCastService()
         } else {
             Timber.w("Wi-Fi Direct permissions denied — Miracast unavailable")
-            tvStatus.text = "未授予 Wi-Fi Direct 权限，Miracast 不可用"
+            tvStatus.setText(R.string.wifi_direct_permission_denied)
         }
         if (privilegedSetupAttempted) promptOverlayPermissionIfNeeded()
     }
@@ -244,19 +234,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun promptOverlayPermissionIfNeeded() {
-        if (!AppSettings.isAutoLaunchPlayer(this)) return
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        if (!AppSettings.isAutoLaunchPlayer(this) || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
         if (overlayPromptShown || Settings.canDrawOverlays(this)) return
         overlayPromptShown = true
-
         AlertDialog.Builder(this)
-            .setTitle("允许后台自动显示投屏画面")
-            .setMessage(
-                "应用退出到 Android TV 桌面后接收服务仍会运行。为了在收到投屏时自动切到播放器，" +
-                    "请允许“显示在其他应用上层”。Magisk Root / Shizuku 优化成功时通常会自动配置。"
-            )
-            .setPositiveButton("去设置") { _, _ -> openOverlaySettings() }
-            .setNegativeButton("稍后", null)
+            .setTitle(R.string.overlay_dialog_title)
+            .setMessage(R.string.overlay_dialog_message)
+            .setPositiveButton(R.string.go_to_settings) { _, _ -> openOverlaySettings() }
+            .setNegativeButton(R.string.later, null)
             .show()
     }
 
@@ -273,12 +258,7 @@ class MainActivity : AppCompatActivity() {
                 Timber.w("Overlay settings not available: ${intent.data}")
             }
         }
-        Toast.makeText(this, "此电视没有悬浮窗设置页，可使用 Root/Shizuku 自动配置", Toast.LENGTH_LONG).show()
-    }
-
-    private fun checkNetworkAndStart() {
-        startCastService()
-        updateStatus()
+        Toast.makeText(this, R.string.overlay_settings_unavailable, Toast.LENGTH_LONG).show()
     }
 
     private fun startCastService() {
@@ -290,7 +270,7 @@ class MainActivity : AppCompatActivity() {
         settingsApplyJob = lifecycleScope.launch {
             delay(500)
             restartReceiverService(showToast = false)
-            Toast.makeText(this@MainActivity, "$source 配置已应用", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this@MainActivity, getString(R.string.config_applied, source), Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -303,7 +283,7 @@ class MainActivity : AppCompatActivity() {
             delay(150)
             btnRestartReceiver.isEnabled = true
             updateIdentityInfo()
-            if (showToast) Toast.makeText(this@MainActivity, "投屏接收服务已重新启动", Toast.LENGTH_SHORT).show()
+            if (showToast) toast(R.string.receiver_restarted)
         }
     }
 
@@ -311,12 +291,8 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             while (true) {
                 val ip = NetworkUtils.getLocalIpAddress()
-                tvDeviceIp.text = getString(R.string.device_ip, ip ?: "等待网络")
-                tvStatus.text = if (NetworkUtils.isNetworkAvailable(this@MainActivity)) {
-                    getString(R.string.waiting_connection)
-                } else {
-                    "等待网络连接"
-                }
+                tvDeviceIp.text = getString(R.string.device_ip, ip ?: getString(R.string.waiting_network))
+                tvStatus.setText(if (NetworkUtils.isNetworkAvailable(this@MainActivity)) R.string.waiting_connection else R.string.waiting_network)
                 updateIdentityInfo()
                 delay(2000)
             }
@@ -341,15 +317,13 @@ class MainActivity : AppCompatActivity() {
                 installBootScript = AppSettings.isAutoStartOnBoot(this@MainActivity)
             )
             privilegedSetupAttempted = true
-
             withContext(Dispatchers.Main) {
                 if (userInitiated) {
                     val message = when {
-                        result.success && result.bootScriptInstalled ->
-                            "${result.privilegedChannel} 优化完成，Magisk 开机兜底已安装"
-                        result.success -> "${result.privilegedChannel} 后台优化完成"
-                        result.privilegedChannel == "Android" -> "未获得 Root/Shizuku 权限，将使用 Android 标准后台模式"
-                        else -> "后台优化未完全成功，请检查授权"
+                        result.success && result.bootScriptInstalled -> getString(R.string.optimize_done_magisk, result.privilegedChannel)
+                        result.success -> getString(R.string.optimize_done, result.privilegedChannel)
+                        result.privilegedChannel == "Android" -> getString(R.string.optimize_android_fallback)
+                        else -> getString(R.string.optimize_partial)
                     }
                     Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
                 }
@@ -361,8 +335,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun syncMagiskBootIntegration(enabled: Boolean) {
         lifecycleScope.launch(Dispatchers.IO) {
-            if (enabled) PrivilegedAccess.installMagiskBootScript(this@MainActivity)
-            else PrivilegedAccess.removeMagiskBootScript()
+            if (enabled) PrivilegedAccess.installMagiskBootScript(this@MainActivity) else PrivilegedAccess.removeMagiskBootScript()
             withContext(Dispatchers.Main) { refreshPrivilegeStatus() }
         }
     }
@@ -372,40 +345,42 @@ class MainActivity : AppCompatActivity() {
             val status = PrivilegedAccess.getStatus(this@MainActivity)
             val overlayAllowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this@MainActivity)
             val autoStart = AppSettings.isAutoStartOnBoot(this@MainActivity)
-
             withContext(Dispatchers.Main) {
-                tvRootStatus.text = when {
-                    status.magiskAvailable -> "● Magisk Root · 已授权"
-                    status.rootAvailable -> "● Root · 已授权"
-                    else -> "○ Root · 不可用"
-                }
+                tvRootStatus.setText(when {
+                    status.magiskAvailable -> R.string.root_magisk_authorized
+                    status.rootAvailable -> R.string.root_authorized
+                    else -> R.string.root_unavailable
+                })
                 tvRootStatus.setTextColor(ContextCompat.getColor(this@MainActivity, if (status.rootAvailable) R.color.success else R.color.text_secondary))
 
-                tvShizukuStatus.text = when {
-                    Build.VERSION.SDK_INT < Build.VERSION_CODES.N -> "○ Shizuku · Android 7+ 可用"
-                    status.shizukuAuthorized -> "● Shizuku · 已连接并授权"
-                    status.shizukuAlive -> "● Shizuku · 已连接，等待授权"
-                    else -> "○ Shizuku · 未连接"
-                }
+                tvShizukuStatus.setText(when {
+                    Build.VERSION.SDK_INT < Build.VERSION_CODES.N -> R.string.shizuku_android7
+                    status.shizukuAuthorized -> R.string.shizuku_authorized
+                    status.shizukuAlive -> R.string.shizuku_waiting_auth
+                    else -> R.string.shizuku_not_connected
+                })
                 tvShizukuStatus.setTextColor(ContextCompat.getColor(this@MainActivity, if (status.shizukuAuthorized) R.color.success else R.color.text_secondary))
 
-                tvOverlayStatus.text = if (overlayAllowed) "● 后台弹出 · 已允许" else "○ 后台弹出 · 需要授权"
+                tvOverlayStatus.setText(if (overlayAllowed) R.string.overlay_allowed else R.string.overlay_needs_permission)
                 tvOverlayStatus.setTextColor(ContextCompat.getColor(this@MainActivity, if (overlayAllowed) R.color.success else R.color.warning))
 
-                tvBootStatus.text = when {
-                    !autoStart -> "○ 开机接收 · 已关闭"
-                    status.bootScriptInstalled -> "● 开机接收 · BootReceiver + Magisk service.d"
-                    else -> "● 开机接收 · Android BootReceiver"
-                }
+                tvBootStatus.setText(when {
+                    !autoStart -> R.string.boot_receiver_off
+                    status.bootScriptInstalled -> R.string.boot_receiver_magisk
+                    else -> R.string.boot_receiver_android
+                })
                 tvBootStatus.setTextColor(ContextCompat.getColor(this@MainActivity, if (autoStart) R.color.success else R.color.text_secondary))
 
-                btnOptimizeBackground.text = if (
-                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.N &&
-                    !status.rootAvailable && status.shizukuAlive && !status.shizukuAuthorized
-                ) "授权 Shizuku 并优化" else getString(R.string.optimize_background)
+                btnOptimizeBackground.setText(
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && !status.rootAvailable && status.shizukuAlive && !status.shizukuAuthorized) {
+                        R.string.authorize_shizuku_optimize
+                    } else R.string.optimize_background
+                )
             }
         }
     }
+
+    private fun toast(resId: Int) = Toast.makeText(this, resId, Toast.LENGTH_SHORT).show()
 
     override fun onDestroy() {
         settingsApplyJob?.cancel()

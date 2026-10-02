@@ -1,9 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  极简两行控制条：进度行 + 传输控制行。
-  画质/播放速度/字幕/屏幕方向/视频信息都收进「更多」弹窗（btn_more），
-  避免 OSD 在电视上占掉近一半屏幕高度。
--->
+<!-- Android TV playback OSD: large D-pad targets, clear focus ring, minimal screen coverage. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
@@ -11,12 +7,11 @@
     android:layout_gravity="bottom"
     android:background="@drawable/bg_player_control_scrim"
     android:orientation="vertical"
-    android:paddingLeft="24dp"
-    android:paddingTop="12dp"
-    android:paddingRight="24dp"
-    android:paddingBottom="12dp">
+    android:paddingLeft="48dp"
+    android:paddingTop="16dp"
+    android:paddingRight="48dp"
+    android:paddingBottom="24dp">
 
-    <!-- 进度条和时间 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -25,116 +20,139 @@
 
         <TextView
             android:id="@+id/exo_position"
-            android:layout_width="wrap_content"
+            android:layout_width="72dp"
             android:layout_height="wrap_content"
+            android:gravity="start|center_vertical"
             android:includeFontPadding="false"
-            android:paddingLeft="4dp"
-            android:paddingRight="4dp"
             android:textColor="@color/text_primary"
-            android:textSize="14sp"
+            android:textSize="16sp"
             android:textStyle="bold" />
 
         <androidx.media3.ui.DefaultTimeBar
             android:id="@+id/exo_progress"
             android:layout_width="0dp"
-            android:layout_height="24dp"
+            android:layout_height="32dp"
             android:layout_weight="1"
+            android:focusable="true"
+            android:focusableInTouchMode="false"
             app:played_color="@color/accent"
-            app:buffered_color="@color/text_secondary"
-            app:unplayed_color="#40FFFFFF"
+            app:buffered_color="#90FFFFFF"
+            app:unplayed_color="#35FFFFFF"
             app:scrubber_color="@color/accent"
+            app:scrubber_dragged_size="18dp"
             app:scrubber_enabled_size="14dp"
             app:scrubber_disabled_size="0dp" />
 
         <TextView
             android:id="@+id/exo_duration"
-            android:layout_width="wrap_content"
+            android:layout_width="72dp"
             android:layout_height="wrap_content"
+            android:gravity="end|center_vertical"
             android:includeFontPadding="false"
-            android:paddingLeft="4dp"
-            android:paddingRight="4dp"
             android:textColor="@color/text_primary"
-            android:textSize="14sp"
+            android:textSize="16sp"
             android:textStyle="bold" />
     </LinearLayout>
 
-    <!-- 传输控制 + 更多 -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
         android:gravity="center"
         android:orientation="horizontal">
 
-        <!-- 上一个 -->
         <ImageButton
             android:id="@+id/exo_prev"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:layout_margin="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_marginHorizontal="6dp"
+            android:background="@drawable/bg_player_button_tv"
             android:contentDescription="上一个"
+            android:focusable="true"
+            android:focusableInTouchMode="false"
+            android:nextFocusRight="@id/exo_rew"
+            android:padding="14dp"
             android:scaleType="fitCenter"
             android:src="@android:drawable/ic_menu_revert"
             android:tint="@color/text_primary" />
 
-        <!-- 后退 -->
         <ImageButton
             android:id="@+id/exo_rew"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:layout_margin="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_marginHorizontal="6dp"
+            android:background="@drawable/bg_player_button_tv"
             android:contentDescription="后退"
+            android:focusable="true"
+            android:focusableInTouchMode="false"
+            android:nextFocusLeft="@id/exo_prev"
+            android:nextFocusRight="@id/exo_play_pause"
+            android:padding="14dp"
             android:scaleType="fitCenter"
             android:src="@android:drawable/ic_media_rew"
             android:tint="@color/text_primary" />
 
-        <!-- 播放/暂停 -->
         <ImageButton
             android:id="@+id/exo_play_pause"
-            android:layout_width="52dp"
-            android:layout_height="52dp"
-            android:layout_margin="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:layout_width="68dp"
+            android:layout_height="68dp"
+            android:layout_marginHorizontal="8dp"
+            android:background="@drawable/bg_player_button_tv"
             android:contentDescription="播放/暂停"
+            android:focusable="true"
+            android:focusableInTouchMode="false"
+            android:nextFocusLeft="@id/exo_rew"
+            android:nextFocusRight="@id/exo_ffwd"
+            android:padding="16dp"
             android:scaleType="fitCenter"
             android:tint="@color/text_primary" />
 
-        <!-- 前进 -->
         <ImageButton
             android:id="@+id/exo_ffwd"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:layout_margin="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_marginHorizontal="6dp"
+            android:background="@drawable/bg_player_button_tv"
             android:contentDescription="前进"
+            android:focusable="true"
+            android:focusableInTouchMode="false"
+            android:nextFocusLeft="@id/exo_play_pause"
+            android:nextFocusRight="@id/exo_next"
+            android:padding="14dp"
             android:scaleType="fitCenter"
             android:src="@android:drawable/ic_media_ff"
             android:tint="@color/text_primary" />
 
-        <!-- 下一个 -->
         <ImageButton
             android:id="@+id/exo_next"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:layout_margin="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_marginHorizontal="6dp"
+            android:background="@drawable/bg_player_button_tv"
             android:contentDescription="下一个"
+            android:focusable="true"
+            android:focusableInTouchMode="false"
+            android:nextFocusLeft="@id/exo_ffwd"
+            android:nextFocusRight="@id/btn_more"
+            android:padding="14dp"
+            android:rotation="180"
             android:scaleType="fitCenter"
             android:src="@android:drawable/ic_menu_revert"
             android:tint="@color/text_primary" />
 
-        <!-- 更多：画质 / 速度 / 字幕 / 方向 / 视频信息 -->
         <ImageButton
             android:id="@+id/btn_more"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:layout_margin="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_marginHorizontal="6dp"
+            android:background="@drawable/bg_player_button_tv"
             android:contentDescription="更多"
+            android:focusable="true"
+            android:focusableInTouchMode="false"
+            android:nextFocusLeft="@id/exo_next"
+            android:padding="14dp"
             android:scaleType="fitCenter"
             android:src="@android:drawable/ic_menu_more"
             android:tint="@color/text_primary" />
     </LinearLayout>
-
 </LinearLayout>

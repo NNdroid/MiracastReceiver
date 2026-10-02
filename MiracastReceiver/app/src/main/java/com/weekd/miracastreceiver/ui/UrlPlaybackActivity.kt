@@ -52,6 +52,14 @@ class UrlPlaybackActivity : AppCompatActivity() {
         private const val MAX_BUFFER_MS = 15_000
         private const val START_BUFFER_MS = 350
         private const val REBUFFER_MS = 900
+
+        // Live HLS/DASH should start close to the live edge. These are deliberately conservative
+        // enough for home Wi-Fi while avoiding multi-second latency inherited from stream defaults.
+        private const val LIVE_TARGET_OFFSET_MS = 1_500L
+        private const val LIVE_MIN_OFFSET_MS = 750L
+        private const val LIVE_MAX_OFFSET_MS = 4_000L
+        private const val LIVE_MIN_SPEED = 0.97f
+        private const val LIVE_MAX_SPEED = 1.03f
     }
 
     private lateinit var playerView: PlayerView
@@ -138,15 +146,27 @@ class UrlPlaybackActivity : AppCompatActivity() {
         val exo = ensurePlayer()
         tvTitle.text = currentTitle
         tvError.visibility = View.GONE
+
+        // Some senders repeat the same SetAVTransportURI/open-url while playback is already being
+        // prepared. Treat that as an idempotent update instead of throwing away buffered data.
+        val activeUrl = exo.currentMediaItem?.localConfiguration?.uri?.toString()
+        if (activeUrl == currentUrl && exo.playbackState != Player.STATE_IDLE) {
+            Timber.d("URL playback request already active; keeping buffer/decoder: $currentUrl")
+            exo.playWhenReady = true
+            RuntimeState.updatePlayback {
+                it.copy(title = currentTitle, uri = currentUrl, source = "WEB_URL", error = "")
+            }
+            startProgressUpdates()
+            return
+        }
+
         bufferingIndicator.visibility = View.VISIBLE
         loadStartedAtMs = SystemClock.elapsedRealtime()
 
-        // Reuse the already-created codec/player when only the URL changes. setMediaItem() clears
-        // the previous timeline and prepare() reuses the playback thread/renderers instead of paying
-        // the full ExoPlayer construction cost for every WebUI push.
-        exo.stop()
-        exo.clearMediaItems()
-        exo.setMediaItem(createMediaItem(currentUrl))
+        // setMediaItem(resetPosition=true) replaces the timeline without stop()/clearMediaItems().
+        // Keeping the ExoPlayer instance alive lets Media3 reuse its playback thread, renderers and
+        // decoder resources when the next URL is compatible, which reduces channel-switch latency.
+        exo.setMediaItem(createMediaItem(currentUrl), true)
         exo.playWhenReady = true
         exo.prepare()
 
@@ -171,6 +191,11 @@ class UrlPlaybackActivity : AppCompatActivity() {
             .setDefaultRequestProperties(requestHeaders.filterKeys { !it.equals("User-Agent", true) })
         val dataSourceFactory = DefaultDataSource.Factory(this, httpFactory)
         val mediaSourceFactory = DefaultMediaSourceFactory(dataSourceFactory)
+            .setLiveTargetOffsetMs(LIVE_TARGET_OFFSET_MS)
+            .setLiveMinOffsetMs(LIVE_MIN_OFFSET_MS)
+            .setLiveMaxOffsetMs(LIVE_MAX_OFFSET_MS)
+            .setLiveMinSpeed(LIVE_MIN_SPEED)
+            .setLiveMaxSpeed(LIVE_MAX_SPEED)
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(MIN_BUFFER_MS, MAX_BUFFER_MS, START_BUFFER_MS, REBUFFER_MS)
             .setPrioritizeTimeOverSizeThresholds(true)
@@ -234,9 +259,27 @@ class UrlPlaybackActivity : AppCompatActivity() {
     private fun createMediaItem(url: String): MediaItem {
         val clean = url.substringBefore('?').substringBefore('#').lowercase()
         val builder = MediaItem.Builder().setUri(url)
-        when {
-            clean.endsWith(".m3u8") -> builder.setMimeType(MimeTypes.APPLICATION_M3U8)
-            clean.endsWith(".mpd") -> builder.setMimeType(MimeTypes.APPLICATION_MPD)
+        val adaptive = when {
+            clean.endsWith(".m3u8") -> {
+                builder.setMimeType(MimeTypes.APPLICATION_M3U8)
+                true
+            }
+            clean.endsWith(".mpd") -> {
+                builder.setMimeType(MimeTypes.APPLICATION_MPD)
+                true
+            }
+            else -> false
+        }
+        if (adaptive) {
+            builder.setLiveConfiguration(
+                MediaItem.LiveConfiguration.Builder()
+                    .setTargetOffsetMs(LIVE_TARGET_OFFSET_MS)
+                    .setMinOffsetMs(LIVE_MIN_OFFSET_MS)
+                    .setMaxOffsetMs(LIVE_MAX_OFFSET_MS)
+                    .setMinPlaybackSpeed(LIVE_MIN_SPEED)
+                    .setMaxPlaybackSpeed(LIVE_MAX_SPEED)
+                    .build()
+            )
         }
         return builder.build()
     }

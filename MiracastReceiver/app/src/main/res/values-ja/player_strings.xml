@@ -1,0 +1,2 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources><string name="player_image_description">キャスト画像</string><string name="player_remote_hint">方向キー: 操作選択 · 左右: シーク · INFO/MENU: 映像情報</string><string name="player_previous">前へ</string><string name="player_rewind">巻き戻し</string><string name="player_play_pause">再生 / 一時停止</string><string name="player_fast_forward">早送り</string><string name="player_next">次へ</string><string name="player_more">その他</string></resources>

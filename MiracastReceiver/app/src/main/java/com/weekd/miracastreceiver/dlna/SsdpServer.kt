@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -119,7 +120,7 @@ class SsdpServer(
     private suspend fun receiveLoop(socket: MulticastSocket) {
         val buffer = ByteArray(2048)
         try {
-            while (isActive && !socket.isClosed) {
+            while (currentCoroutineContext().isActive && !socket.isClosed) {
                 val packet = DatagramPacket(buffer, buffer.size)
                 socket.receive(packet)
                 val message = String(packet.data, 0, packet.length)
@@ -266,7 +267,8 @@ class SsdpServer(
     private fun multicastInterfaces(): List<NetworkInterface> =
         NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
             .filter { iface ->
-                runCatching { iface.isUp && !iface.isLoopback && iface.supportsMulticast() }.getOrDefault(false) }
+                runCatching { iface.isUp && !iface.isLoopback && iface.supportsMulticast() }.getOrDefault(false)
+            }
             .filterNot { iface ->
                 val n = iface.name.lowercase()
                 n.startsWith("tun") || n.startsWith("tap") || n.startsWith("wg") ||

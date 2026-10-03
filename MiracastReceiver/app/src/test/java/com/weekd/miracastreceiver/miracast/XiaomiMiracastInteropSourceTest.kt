@@ -12,35 +12,36 @@ class XiaomiMiracastInteropSourceTest {
     private val rootHelper = File("src/main/java/com/weekd/miracastreceiver/miracast/WfdRootHelper.kt").readText()
 
     @Test
-    fun sinkPrefersSourceOwnedGroupInsteadOfAutonomousGo() {
-        assertTrue(wifiDirect.contains("prepareForSourceOwnedGroup()"))
-        assertTrue(wifiDirect.contains("topology=source-go-preferred"))
-        assertTrue(wifiDirect.contains("Removing stale empty autonomous GO"))
-        assertTrue(wifiDirect.contains("Source can become Group Owner"))
-        assertFalse(wifiDirect.contains("p2p.createGroup("))
-        assertFalse(wifiDirect.contains("autonomousGo=true"))
+    fun sinkSupportsStandardAndroidGroupOwnerTopologyAndVendorFallback() {
+        assertTrue(wifiDirect.contains("prepareCompatibleTopology()"))
+        assertTrue(wifiDirect.contains("topology=dual-role-sink-go-compatible"))
+        assertTrue(wifiDirect.contains("Sink is GO (standard Android Source-compatible)"))
+        assertTrue(wifiDirect.contains("Source is GO"))
+        assertTrue(wifiDirect.contains("Preserving P2P group"))
+        assertFalse(wifiDirect.contains("Removing stale empty autonomous GO"))
+        assertFalse(wifiDirect.contains("source-go-preferred"))
     }
 
     @Test
-    fun activeGroupsArePreservedWhileOnlyEmptySinkGoIsRemoved() {
-        assertTrue(wifiDirect.contains("existing.isGroupOwner && existing.clientList.isEmpty()"))
-        assertTrue(wifiDirect.contains("Preserving active P2P group"))
-        assertTrue(wifiDirect.contains("existing.clientList.size"))
+    fun frameworkMiracastSinkModeIsBestEffort() {
+        assertTrue(wifiDirect.contains("setMiracastMode(2, \"SINK\")"))
+        assertTrue(wifiDirect.contains("setMiracastMode(0, \"DISABLED\")"))
+        assertTrue(wifiDirect.contains("supplicant WFD mode remains authoritative"))
     }
 
     @Test
-    fun sourceControlPortAndGroupOwnerAddressHintsAreStillPreserved() {
+    fun sourceControlPortAndBothTopologiesRemainSupported() {
         assertTrue(wifiDirect.contains("getControlPort"))
         assertTrue(wifiDirect.contains("source-group-owner"))
         assertTrue(server.contains("WfdSourceHint.snapshot()"))
         assertTrue(server.contains("hint.controlPort"))
         assertTrue(server.contains("hint.ipAddress"))
+        assertTrue(server.contains("p2pSubnetPrefix()"))
         assertTrue(server.contains("discoverSourceControlPort"))
-        assertTrue(server.contains("supplicant-peer-ie"))
     }
 
     @Test
-    fun sinkAdvertises7236ButStillReadsRealSourceWfdIe() {
+    fun sinkAdvertisesPrimarySinkAnd7236() {
         assertTrue(rootHelper.contains("controlPort: Int = 7236"))
         assertTrue(rootHelper.contains("P2P_PEER FIRST"))
         assertTrue(rootHelper.contains("parsePeerControlPort"))
@@ -48,14 +49,14 @@ class XiaomiMiracastInteropSourceTest {
     }
 
     @Test
-    fun broadR1CapabilitiesRemainCompatibleWithXiaomiAndAndroid() {
+    fun broadR1CapabilitiesRemainAvailableWithoutDuplicatePlayHack() {
         assertTrue(session.contains("LPCM 00000003 00"))
         assertTrue(session.contains("AAC 0000000F 00"))
         assertTrue(session.contains("0001FFFF"))
         assertTrue(session.contains("1FFFFFFF"))
         assertTrue(session.contains("00 00 03 10"))
-        assertTrue(session.contains("androidLikeSource"))
-        assertTrue(session.contains("second PLAY"))
+        assertFalse(session.contains("secondPlaySent"))
+        assertFalse(session.contains("sending Android compatibility second PLAY"))
     }
 
     @Test
@@ -63,5 +64,6 @@ class XiaomiMiracastInteropSourceTest {
         assertTrue(session.contains("setupCseq"))
         assertTrue(session.contains("playCseq"))
         assertTrue(session.contains("when (cseq)"))
+        assertTrue(session.contains("PLAY acknowledged; waiting for RTP"))
     }
 }

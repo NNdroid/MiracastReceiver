@@ -19,7 +19,7 @@ val escapedGoogleCastAppId = googleCastAppId.replace("\\", "\\\\").replace("\"",
 
 android {
     namespace = "com.weekd.miracastreceiver"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.weekd.miracastreceiver"

@@ -43,6 +43,8 @@ static int ctrl_open(const char *server_path)
     unlink(local_path);
     if (bind(ctrl_fd, (struct sockaddr *) &local, sizeof(local)) < 0) {
         fprintf(stderr, "bind(%s) failed: %s\n", local_path, strerror(errno));
+        close(ctrl_fd);
+        ctrl_fd = -1;
         return -1;
     }
     if (chown(local_path, WIFI_UID, WIFI_UID) < 0)
@@ -55,6 +57,9 @@ static int ctrl_open(const char *server_path)
     snprintf(dest.sun_path, sizeof(dest.sun_path), "%s", server_path);
     if (connect(ctrl_fd, (struct sockaddr *) &dest, sizeof(dest)) < 0) {
         fprintf(stderr, "connect(%s) failed: %s\n", server_path, strerror(errno));
+        close(ctrl_fd);
+        ctrl_fd = -1;
+        unlink(local_path);
         return -1;
     }
     return 0;
@@ -63,8 +68,8 @@ static int ctrl_open(const char *server_path)
 /*
  * Send one command and briefly wait for a reply. Some SELinux policies allow the command to reach
  * wpa_supplicant but prevent the response from reaching the su-domain client. A missing reply is
- * therefore not treated as failure. The old two-second timeout made four-command advertisement
- * refreshes block for up to eight seconds; 300 ms is sufficient for normal local-socket replies.
+ * therefore still treated as "sent". An explicit FAIL/UNKNOWN reply, however, must propagate as
+ * failure; older builds incorrectly returned success even when supplicant rejected WFD commands.
  */
 static int ctrl_request(const char *cmd)
 {
@@ -83,8 +88,18 @@ static int ctrl_request(const char *cmd)
 
     n = recv(ctrl_fd, reply, sizeof(reply) - 1, 0);
     if (n > 0) {
+        char *p;
         reply[n] = '\0';
         printf("%s -> %s\n", cmd, reply);
+
+        p = reply;
+        while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+            p++;
+        if (strncmp(p, "FAIL", 4) == 0 ||
+            strncmp(p, "UNKNOWN COMMAND", 15) == 0 ||
+            strncmp(p, "UNKNOWN", 7) == 0) {
+            return -1;
+        }
     } else {
         printf("%s -> (sent, no reply)\n", cmd);
     }

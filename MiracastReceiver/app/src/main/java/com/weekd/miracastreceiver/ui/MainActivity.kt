@@ -8,8 +8,9 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
 import androidx.lifecycle.Lifecycle
@@ -34,8 +35,16 @@ class MainActivity : AppCompatActivity() {
     private var pendingDestination: Pair<Destination, Boolean>? = null
     private lateinit var navItems: List<Pair<Destination, TextView>>
 
+    private val wifiDirectPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+            if (grants.isNotEmpty() && grants.values.all { it }) {
+                startCastService()
+            } else {
+                Toast.makeText(this, R.string.wifi_direct_permission_denied, Toast.LENGTH_LONG).show()
+            }
+        }
+
     companion object {
-        private const val REQUEST_CODE_WIFI_DIRECT = 1001
         private const val FOCUS_SCALE = 1.06f
         private const val FOCUS_ANIMATION_MS = 90L
         private val WIFI_DIRECT_PERMISSIONS: Array<String>
@@ -49,6 +58,7 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+        setupBackHandling()
         setupNavigation()
         startCastService()
         if (AppSettings.isMiracastEnabled(this)) requestWifiDirectPermissions()
@@ -65,6 +75,24 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+    }
+
+    private fun setupBackHandling() {
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                handleBackPressed()
+            }
+        })
+    }
+
+    private fun handleBackPressed() {
+        if (currentDestination != Destination.HOME) {
+            showDestination(Destination.HOME, moveFocus = true)
+            backPressExitGate.reset()
+            return
+        }
+        if (backPressExitGate.registerPress(SystemClock.elapsedRealtime())) finish()
+        else Toast.makeText(this, R.string.press_back_again_to_exit, Toast.LENGTH_SHORT).show()
     }
 
     override fun onPostResume() {
@@ -205,18 +233,9 @@ class MainActivity : AppCompatActivity() {
         val missing = WIFI_DIRECT_PERMISSIONS.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
-        if (missing.isNotEmpty()) {
-            runCatching {
-                ActivityCompat.requestPermissions(this, missing.toTypedArray(), REQUEST_CODE_WIFI_DIRECT)
-            }.onFailure { Timber.w(it, "Unable to request Wi-Fi Direct permissions") }
-        }
-    }
-
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode != REQUEST_CODE_WIFI_DIRECT) return
-        if (grantResults.isNotEmpty() && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) startCastService()
-        else Toast.makeText(this, R.string.wifi_direct_permission_denied, Toast.LENGTH_LONG).show()
+        if (missing.isEmpty()) return
+        runCatching { wifiDirectPermissionLauncher.launch(missing.toTypedArray()) }
+            .onFailure { Timber.w(it, "Unable to request Wi-Fi Direct permissions") }
     }
 
     fun startCastService() {
@@ -227,16 +246,5 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() {
         backPressExitGate.reset()
         super.onPause()
-    }
-
-    @Suppress("DEPRECATION")
-    override fun onBackPressed() {
-        if (currentDestination != Destination.HOME) {
-            showDestination(Destination.HOME, moveFocus = true)
-            backPressExitGate.reset()
-            return
-        }
-        if (backPressExitGate.registerPress(SystemClock.elapsedRealtime())) finish()
-        else Toast.makeText(this, R.string.press_back_again_to_exit, Toast.LENGTH_SHORT).show()
     }
 }

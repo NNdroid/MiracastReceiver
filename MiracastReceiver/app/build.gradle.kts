@@ -1,6 +1,5 @@
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
 }
 
 val releaseStoreFile = System.getenv("ANDROID_SIGNING_STORE_FILE")
@@ -20,14 +19,14 @@ val escapedGoogleCastAppId = googleCastAppId.replace("\\", "\\\\").replace("\"",
 
 android {
     namespace = "com.weekd.miracastreceiver"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.weekd.miracastreceiver"
-        minSdk = 21
+        minSdk = 23
         targetSdk = 36
-        versionCode = 42
-        versionName = "1.12.0"
+        versionCode = 43
+        versionName = "1.13.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "GOOGLE_CAST_APP_ID", "\"$escapedGoogleCastAppId\"")
         ndk { abiFilters += setOf("armeabi-v7a", "arm64-v8a") }
@@ -65,8 +64,8 @@ android {
 
     packaging {
         resources {
-            // Material 1.13 pulls jspecify while BouncyCastle is a multi-release JAR; both ship
-            // this OSGi metadata path. It is not used at runtime on Android, so drop the duplicate.
+            // Multi-release Java dependencies can publish the same OSGi metadata path.
+            // Android does not consume it at runtime, so keep only one copy.
             excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
         }
     }
@@ -89,7 +88,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+
     buildFeatures {
         viewBinding = true
         buildConfig = true
@@ -97,42 +96,50 @@ android {
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.15.0")
-    implementation("androidx.appcompat:appcompat:1.7.0")
-    // 1.13.0 is the newest stable Material Components release that still supports minSdk 21.
-    // 1.14.0 adds Material 3 Expressive but raises minSdk to 23.
-    implementation("com.google.android.material:material:1.13.0")
-    implementation("androidx.constraintlayout:constraintlayout:2.2.0")
-    implementation("androidx.leanback:leanback:1.2.0-alpha04")
-    implementation("androidx.tvprovider:tvprovider:1.1.0-alpha01")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
-    implementation("androidx.lifecycle:lifecycle-livedata-ktx:2.8.7")
-    implementation("androidx.lifecycle:lifecycle-process:2.8.7")
-    implementation("androidx.media:media:1.7.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+    implementation("androidx.core:core-ktx:1.19.1")
+    implementation("androidx.appcompat:appcompat:1.8.0")
+    implementation("com.google.android.material:material:1.14.0")
+    implementation("androidx.constraintlayout:constraintlayout:2.2.2")
+    implementation("androidx.leanback:leanback:1.2.0")
+    implementation("androidx.tvprovider:tvprovider:1.1.0")
+
+    val lifecycleVersion = "2.11.0"
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:$lifecycleVersion")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:$lifecycleVersion")
+    implementation("androidx.lifecycle:lifecycle-livedata-ktx:$lifecycleVersion")
+    implementation("androidx.lifecycle:lifecycle-process:$lifecycleVersion")
+    implementation("androidx.media:media:1.8.0")
+
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
+
+    // 13.1.5 remains the latest published Shizuku API artifact.
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.squareup.retrofit2:retrofit:2.11.0")
-    implementation("com.squareup.retrofit2:converter-gson:2.11.0")
-    implementation("com.google.code.gson:gson:2.11.0")
+
+    implementation("com.squareup.okhttp3:okhttp:5.3.0")
+    implementation("com.squareup.retrofit2:retrofit:3.0.0")
+    implementation("com.squareup.retrofit2:converter-gson:3.0.0")
+    implementation("com.google.code.gson:gson:2.14.0")
+
     implementation("com.google.android.gms:play-services-cast-tv:21.0.1")
-    implementation("com.google.android.gms:play-services-cast:21.4.0")
-    val media3Version = "1.8.1"
+    implementation("com.google.android.gms:play-services-cast:22.3.1")
+
+    val media3Version = "1.11.1"
     implementation("androidx.media3:media3-exoplayer:$media3Version")
     implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
     implementation("androidx.media3:media3-exoplayer-dash:$media3Version")
     implementation("androidx.media3:media3-datasource-okhttp:$media3Version")
     implementation("androidx.media3:media3-ui:$media3Version")
     implementation("androidx.media3:media3-common:$media3Version")
+
     implementation("org.webrtc:google-webrtc:1.0.32006")
     implementation("com.jakewharton.timber:timber:5.0.1")
-    implementation("com.google.zxing:core:3.5.3")
-    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
-    implementation("com.googlecode.plist:dd-plist:1.28")
+    implementation("com.google.zxing:core:3.5.4")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.86")
+    implementation("com.googlecode.plist:dd-plist:1.29")
+
     testImplementation("junit:junit:4.13.2")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
 }

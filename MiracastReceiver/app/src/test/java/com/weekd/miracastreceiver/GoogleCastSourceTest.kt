@@ -13,7 +13,7 @@ class GoogleCastSourceTest {
     @Test
     fun castConnectDependenciesAndBuildConfigArePresent() {
         assertTrue(gradle.contains("play-services-cast-tv:21.0.1"))
-        assertTrue(gradle.contains("play-services-cast:21.4.0"))
+        assertTrue(gradle.contains("play-services-cast:22.3.1"))
         assertTrue(gradle.contains("GOOGLE_CAST_APP_ID"))
     }
 

@@ -6,13 +6,13 @@ import org.junit.Test
 
 class WfdRootHelperTest {
     @Test
-    fun `primary sink without RTSP server advertises zero control port`() {
-        assertEquals("0006001100000032", WfdRootHelper.subelemHex())
+    fun `primary sink advertises Xiaomi compatible 7236 control port by default`() {
+        assertEquals("000600111c440032", WfdRootHelper.subelemHex())
     }
 
     @Test
     fun `device info can still encode an explicit control port`() {
-        assertEquals("000600111c440032", WfdRootHelper.subelemHex(7236))
+        assertEquals("000600111f900032", WfdRootHelper.subelemHex(8080))
     }
 
     @Test

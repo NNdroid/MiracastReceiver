@@ -13,11 +13,15 @@ object RuntimeState {
         val uri: String = "",
         val positionMs: Long = 0L,
         val durationMs: Long = 0L,
+        val isLive: Boolean = false,
+        val isSeekable: Boolean = false,
         val speed: Float = 1f,
         val volume: Int = 100,
         val source: String = "",
         val error: String = "",
-        val retryAttempt: Int = 0
+        val retryAttempt: Int = 0,
+        val decoderName: String = "",
+        val hardwareDecoder: Boolean = false
     )
 
     @Volatile var serviceRunning: Boolean = false
@@ -64,6 +68,12 @@ object RuntimeState {
     var playbackDurationMs: Long
         get() = playbackRef.get().durationMs
         set(value) = updatePlayback { it.copy(durationMs = value) }
+    var playbackIsLive: Boolean
+        get() = playbackRef.get().isLive
+        set(value) = updatePlayback { it.copy(isLive = value) }
+    var playbackIsSeekable: Boolean
+        get() = playbackRef.get().isSeekable
+        set(value) = updatePlayback { it.copy(isSeekable = value) }
     var playbackSpeed: Float
         get() = playbackRef.get().speed
         set(value) = updatePlayback { it.copy(speed = value) }
@@ -86,6 +96,24 @@ object RuntimeState {
         GoogleCastReceiver.syncPlayback(reset)
     }
 
-    fun decoderName(): String = VideoDecoder.lastDecoderName
-    fun decoderHardwareAccelerated(): Boolean = VideoDecoder.lastDecoderHardwareAccelerated
+    fun decoderName(): String {
+        val playback = playbackRef.get()
+        if (playback.decoderName.isNotBlank()) return playback.decoderName
+        return if (playback.source.equals("AirPlay", ignoreCase = true) ||
+            playback.source.equals("Miracast", ignoreCase = true)
+        ) {
+            VideoDecoder.lastDecoderName
+        } else {
+            ""
+        }
+    }
+
+    fun decoderHardwareAccelerated(): Boolean {
+        val playback = playbackRef.get()
+        if (playback.decoderName.isNotBlank()) return playback.hardwareDecoder
+        val mirrorSource = playback.source.equals("AirPlay", ignoreCase = true) ||
+            playback.source.equals("Miracast", ignoreCase = true)
+        return mirrorSource && VideoDecoder.lastDecoderName.isNotBlank() &&
+            VideoDecoder.lastDecoderHardwareAccelerated
+    }
 }

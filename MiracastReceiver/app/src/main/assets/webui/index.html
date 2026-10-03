@@ -10,6 +10,7 @@
     (()=>{try{const t=localStorage.getItem('webuiTheme')||'auto';if(t==='light'||t==='dark')document.documentElement.dataset.theme=t;}catch(_){}})();
   </script>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/playback.css">
 </head>
 <body>
   <div class="ambient ambient-a"></div><div class="ambient ambient-b"></div>
@@ -20,8 +21,95 @@
       <header class="topbar"><div><p class="eyebrow">ANDROID TV RECEIVER</p><h1 id="pageTitle"></h1></div><div class="header-actions"><select id="themeSelect" aria-label="Theme"><option value="auto" data-i18n="themeAuto"></option><option value="light" data-i18n="themeLight"></option><option value="dark" data-i18n="themeDark"></option></select><select id="languageSelect" aria-label="Language"><option value="auto">Auto</option><option value="en">English</option><option value="zh-CN">简体中文</option><option value="zh-TW">繁體中文</option><option value="ja">日本語</option><option value="ko">한국어</option></select><span id="connectionBadge" class="badge"><i></i><span data-i18n="connecting"></span></span><button id="copyAddressBtn" class="ghost" data-i18n="copyAddress"></button><button id="restartBtn" class="primary subtle" data-i18n="restartReceiver"></button></div></header>
       <main>
         <section id="page-overview" class="page active"><article class="hero panel"><div class="hero-copy"><span class="hero-kicker">READY TO CAST</span><h2 id="deviceName">Android TV</h2><p id="deviceMeta" data-i18n="loadingDevice"></p><div class="hero-tags"><span id="serviceState" class="soft-pill" data-i18n="receiverService"></span><span id="playbackState" class="soft-pill">IDLE</span><span id="portMode" class="soft-pill" data-i18n="webuiPort"></span></div></div><div class="hero-address"><span data-i18n="managementAddress"></span><strong id="webAddress">-</strong><small id="serviceUptime">-</small></div></article><div class="metric-grid"><article class="metric-card"><div class="metric-icon cyan">IP</div><div><span data-i18n="tvAddress"></span><strong id="deviceIp">-</strong><small id="deviceIpMeta">IPv4 / IPv6</small></div></article><article class="metric-card"><div class="metric-icon green">▶</div><div><span data-i18n="currentPlayback"></span><strong id="playbackTitle" data-i18n="nothingPlaying"></strong><small data-i18n="playerStateSync"></small></div></article><article class="metric-card"><div class="metric-icon violet">A</div><div><span>AirPlay</span><strong id="airplayState">-</strong><small data-i18n="airplayHint"></small></div></article><article class="metric-card"><div class="metric-icon amber">M</div><div><span>Miracast</span><strong id="miracastState">-</strong><small>Windows / Android WFD</small></div></article></div><div class="grid two overview-grid"><article class="panel"><div class="panel-title"><div><p class="eyebrow">RECEIVER</p><h2 data-i18n="protocolHealth"></h2></div></div><div class="status-list premium-list"><div><span>DLNA / UPnP</span><b id="dlnaState">-</b></div><div><span data-i18n="hardwareDecode"></span><b id="decoderState">-</b></div><div><span data-i18n="actualWebuiPort"></span><b id="runtimePort">-</b></div><div><span data-i18n="lastError"></span><b id="lastError">-</b></div></div></article><article class="panel"><div class="panel-title"><div><p class="eyebrow">SYSTEM ACCESS</p><h2 data-i18n="privilegeBackground"></h2></div></div><div class="status-list premium-list"><div><span>Magisk / Root</span><b id="rootState">-</b></div><div><span>Shizuku</span><b id="shizukuState">-</b></div><div><span data-i18n="bootFallback"></span><b id="bootState">-</b></div><div><span data-i18n="qrAccess"></span><b data-i18n="qrAccessHint"></b></div></div></article></div></section>
+
         <section id="page-protocols" class="page"><div class="page-intro"><p class="eyebrow">DISCOVERY &amp; PROTOCOLS</p><h2 data-i18n="protocolTitle"></h2><p data-i18n="protocolIntro"></p></div><form id="configForm"><article class="panel"><div class="panel-title"><div><h2 data-i18n="receiverProtocols"></h2><p data-i18n="disableUnused"></p></div></div><div class="switch-grid"><label class="switch-row"><span><b>AirPlay</b><small data-i18n="airplayDesc"></small></span><input id="airPlayEnabled" type="checkbox"><i></i></label><label class="switch-row"><span><b>DLNA / UPnP</b><small data-i18n="dlnaDesc"></small></span><input id="dlnaEnabled" type="checkbox"><i></i></label><label class="switch-row"><span><b>Miracast / WFD</b><small data-i18n="miracastDesc"></small></span><input id="miracastEnabled" type="checkbox"><i></i></label><label class="switch-row"><span><b data-i18n="customMdns"></b><small data-i18n="customMdnsDesc"></small></span><input id="customMdnsEnabled" type="checkbox"><i></i></label><label class="switch-row"><span><b data-i18n="airplayAudio"></b><small data-i18n="airplayAudioDesc"></small></span><input id="airPlayAudioEnabled" type="checkbox"><i></i></label><label class="switch-row"><span><b data-i18n="autoLaunchPlayer"></b><small data-i18n="autoLaunchDesc"></small></span><input id="autoLaunchPlayer" type="checkbox"><i></i></label></div></article><article class="panel"><div class="panel-title"><div><h2 data-i18n="identityPicture"></h2><p data-i18n="identityPictureDesc"></p></div></div><div class="form-grid"><label><span data-i18n="deviceName"></span><input id="deviceNameInput" type="text" maxlength="64" data-i18n-placeholder="systemNamePlaceholder"></label><label><span data-i18n="mirrorResolution"></span><select id="mirrorMaxHeight"><option value="0" data-i18n="autoTvMax"></option><option value="720">720p</option><option value="1080">1080p</option><option value="1440">1440p</option><option value="2160">2160p</option></select></label><label>DLNA / UPnP <span data-i18n="port"></span><input id="upnpPort" type="number" min="1024" max="65535"></label><label><span data-i18n="connectionCode"></span><input id="connectionCode" type="text" readonly></label></div><div class="actions"><button type="button" id="regenCodeBtn" data-i18n="regenCode"></button><button type="submit" class="primary" data-i18n="saveApply"></button></div></article></form></section>
-        <section id="page-playback" class="page"><div class="page-intro"><p class="eyebrow">NOW PLAYING</p><h2 data-i18n="remotePlayer"></h2><p data-i18n="remotePlayerIntro"></p></div><article id="directUrlCard" class="panel"><div class="panel-title"><div><p class="eyebrow">DIRECT STREAM</p><h2 data-i18n="directStream"></h2><p data-i18n="directStreamDesc"></p></div></div><div class="form-grid"><label style="grid-column:1/-1"><span data-i18n="mediaUrl"></span><input id="directMediaUrl" type="url" maxlength="4096" placeholder="https://example.com/live/index.m3u8"></label><label><span data-i18n="optionalTitle"></span><input id="directMediaTitle" type="text" maxlength="160"></label><label><span>User-Agent</span><input id="directUserAgent" type="text" maxlength="2048"></label><label><span>Referer</span><input id="directReferer" type="text" maxlength="2048"></label><label><span>Authorization</span><input id="directAuthorization" type="text" maxlength="2048"></label></div><div class="actions"><button id="directPlayBtn" class="primary" data-i18n="playNow"></button></div><div class="muted" data-i18n="directStreamSafety"></div></article><article class="panel player-panel"><div class="now-playing"><span class="now-icon">▶</span><div><strong id="nowTitle" data-i18n="nothingPlaying"></strong><span id="nowSource">-</span></div></div><div class="progress"><div id="progressFill"></div></div><div id="progressText" class="muted progress-label">00:00 / 00:00</div><div class="player-buttons"><button data-player="pause" data-i18n="pause"></button><button class="primary play-main" data-player="play" data-i18n="play"></button><button data-player="stop" data-i18n="stop"></button></div><div class="form-grid compact"><label><span data-i18n="seekSeconds"></span><input id="seekSeconds" type="number" min="0" value="0"></label><label><span data-i18n="volume"></span><input id="volumeValue" type="number" min="0" max="100" value="100"></label><label><span data-i18n="speed"></span><input id="speedValue" type="number" min="0.25" max="4" step="0.25" value="1"></label></div><div class="actions"><button id="seekBtn" data-i18n="seek"></button><button id="volumeBtn" data-i18n="setVolume"></button><button id="speedBtn" data-i18n="setSpeed"></button></div><div class="status-list top-gap premium-list"><div><span data-i18n="currentDecoder"></span><b id="activeDecoder">-</b></div><div><span data-i18n="hardwareAcceleration"></span><b id="activeHardware">-</b></div></div></article></section>
+
+        <section id="page-playback" class="page">
+          <div class="page-intro"><p class="eyebrow">NOW PLAYING</p><h2 data-i18n="remotePlayer"></h2><p data-i18n="remotePlayerIntro"></p></div>
+
+          <article class="panel remote-player-shell" aria-label="Remote player">
+            <div class="remote-player-stage">
+              <div class="remote-player-content">
+                <div class="player-media-heading">
+                  <div class="media-emblem">MR</div>
+                  <div class="media-copy">
+                    <span class="player-kicker">REMOTE PLAYBACK</span>
+                    <strong id="nowTitle" data-i18n="nothingPlaying"></strong>
+                    <span id="nowSource">-</span>
+                  </div>
+                  <span id="playerStatePill" class="player-state-pill">IDLE</span>
+                </div>
+
+                <div class="player-center">
+                  <span id="liveBadge" class="live-badge hidden">● LIVE</span>
+                  <div class="player-hero-actions">
+                    <button id="back10Btn" class="transport-button transport-skip" type="button" aria-label="Back 10 seconds" title="Back 10 seconds">↺<small>10</small></button>
+                    <button id="playToggleBtn" class="transport-button transport-main" type="button" aria-label="Play" title="Play">▶</button>
+                    <button id="forward10Btn" class="transport-button transport-skip" type="button" aria-label="Forward 10 seconds" title="Forward 10 seconds">↻<small>10</small></button>
+                  </div>
+                </div>
+
+                <div class="player-timeline">
+                  <div class="timeline-row"><span id="currentTimeLabel">0:00</span><span id="durationLabel">0:00</span></div>
+                  <div class="seek-wrap">
+                    <div class="progress" aria-hidden="true"><div id="progressFill"></div></div>
+                    <input id="seekRange" type="range" min="0" max="1" step="250" value="0" aria-label="Playback position">
+                  </div>
+                  <div id="progressText" class="progress-compat">00:00 / 00:00</div>
+                </div>
+
+                <div class="player-control-strip">
+                  <div class="player-volume">
+                    <button id="muteBtn" class="player-icon-button" type="button" aria-label="Mute" title="Mute">🔊</button>
+                    <input id="volumeValue" type="range" min="0" max="100" step="1" value="100" aria-label="Volume">
+                    <output id="volumeLabel" for="volumeValue">100%</output>
+                  </div>
+                  <button id="stopBtn" class="player-stop" type="button" data-player="stop" data-i18n="stop"></button>
+                  <div class="player-speed">
+                    <span class="player-speed-label" data-i18n="speed"></span>
+                    <div class="speed-menu-wrap">
+                      <button id="speedMenuBtn" class="speed-trigger" type="button" aria-haspopup="menu" aria-expanded="false">1×</button>
+                      <div id="speedMenu" class="speed-menu hidden" role="menu">
+                        <button type="button" role="menuitem" data-speed="0.5">0.5×</button>
+                        <button type="button" role="menuitem" data-speed="0.75">0.75×</button>
+                        <button type="button" role="menuitem" data-speed="1" class="active">1×</button>
+                        <button type="button" role="menuitem" data-speed="1.25">1.25×</button>
+                        <button type="button" role="menuitem" data-speed="1.5">1.5×</button>
+                        <button type="button" role="menuitem" data-speed="2">2×</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="player-status-chips">
+                  <span class="player-status-chip"><span data-i18n="currentDecoder"></span><b id="activeDecoder">—</b></span>
+                  <span class="player-status-chip"><span data-i18n="hardwareAcceleration"></span><b id="activeHardware">—</b></span>
+                </div>
+
+                <div class="legacy-player-control" aria-hidden="true">
+                  <input id="seekSeconds" type="number" min="0" value="0" tabindex="-1">
+                  <input id="speedValue" type="hidden" value="1">
+                  <button id="seekBtn" type="button" tabindex="-1" data-i18n="seek"></button>
+                  <button id="volumeBtn" type="button" tabindex="-1" data-i18n="setVolume"></button>
+                  <button id="speedBtn" type="button" tabindex="-1" data-i18n="setSpeed"></button>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <details id="directUrlCard" class="panel direct-stream-drawer">
+            <summary>
+              <div class="direct-stream-summary"><p class="eyebrow">DIRECT STREAM</p><h2 data-i18n="directStream"></h2><p data-i18n="directStreamDesc"></p></div>
+              <span class="direct-stream-chevron">⌄</span>
+            </summary>
+            <div class="direct-stream-body">
+              <div class="form-grid"><label style="grid-column:1/-1"><span data-i18n="mediaUrl"></span><input id="directMediaUrl" type="url" maxlength="4096" placeholder="https://example.com/live/index.m3u8"></label><label><span data-i18n="optionalTitle"></span><input id="directMediaTitle" type="text" maxlength="160"></label><label><span>User-Agent</span><input id="directUserAgent" type="text" maxlength="2048"></label><label><span>Referer</span><input id="directReferer" type="text" maxlength="2048"></label><label><span>Authorization</span><input id="directAuthorization" type="text" maxlength="2048"></label></div>
+              <div class="actions"><button id="directPlayBtn" class="primary" type="button" data-i18n="playNow"></button></div>
+              <div class="muted" data-i18n="directStreamSafety"></div>
+            </div>
+          </details>
+        </section>
+
         <section id="page-system" class="page"><div class="page-intro"><p class="eyebrow">SYSTEM &amp; BACKGROUND</p><h2 data-i18n="systemTitle"></h2><p data-i18n="systemIntro"></p></div><form id="systemForm"><article class="panel"><div class="switch-grid"><label class="switch-row"><span><b data-i18n="enableWebui"></b><small data-i18n="enableWebuiDesc"></small></span><input id="webUiEnabled" type="checkbox"><i></i></label><label class="switch-row"><span><b data-i18n="autoStart"></b><small>BootReceiver + Magisk service.d</small></span><input id="autoStartOnBoot" type="checkbox"><i></i></label></div><input id="webUiAuthRequired" type="checkbox" hidden><div class="panel-title top-gap"><div><h2 id="authModeTitle">WebUI authentication</h2><p id="authModeDescription">Choose how clients authenticate to the management API.</p></div></div><div class="form-grid"><label><span id="authModeLabel">Authentication mode</span><select id="webUiAuthMode"><option value="auto">Generated token (recommended)</option><option value="custom">Custom token</option><option value="none">No authentication</option></select><small id="authModeHint">Generated tokens are persistent and embedded in the TV QR code.</small></label><label id="customTokenField" hidden><span id="customTokenLabel">Custom token</span><input id="webUiCustomToken" type="password" minlength="8" maxlength="128" autocomplete="new-password"><small id="customTokenHint">8–128 characters; spaces and control characters are not allowed.</small></label></div><div class="form-grid port-grid"><label><span data-i18n="preferredPort"></span><input id="webUiPort" type="number" min="1024" max="65535"><small data-i18n="preferredPortDesc"></small></label><label><span data-i18n="runtimePort"></span><input id="runtimePortInput" type="text" readonly><small id="portNotice"></small></label></div><div class="actions"><button type="button" id="optimizeBtn" data-i18n="optimizeBackground"></button><button type="button" id="rotateTokenBtn" data-i18n="rotateToken"></button><button type="submit" class="primary" data-i18n="saveApply"></button></div></article></form><article class="panel diagnostics-panel"><div class="panel-head"><div><p class="eyebrow">DIAGNOSTICS</p><h2 data-i18n="diagnosticSnapshot"></h2></div></div><pre id="diagnostics" data-i18n="loading"></pre></article></section>
         <section id="page-logs" class="page"><div class="page-intro"><p class="eyebrow">LIVE TELEMETRY</p><h2 data-i18n="liveLogs"></h2><p data-i18n="liveLogsIntro"></p></div><article class="panel log-panel"><div class="panel-head"><div><h2>Receiver Log</h2><span class="muted" data-i18n="last400"></span></div><div><button id="refreshLogsBtn" data-i18n="refresh"></button><button id="clearLogsBtn" data-i18n="clear"></button></div></div><pre id="logs" data-i18n="loading"></pre></article></section>
         <div id="toast" class="toast hidden"></div>
@@ -29,6 +117,7 @@
     </div>
   </div>
   <script src="/app.js"></script>
+  <script src="/playback-modern.js"></script>
   <script>
   (()=>{
     const L={

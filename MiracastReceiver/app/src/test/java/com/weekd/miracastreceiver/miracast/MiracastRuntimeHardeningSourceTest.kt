@@ -29,7 +29,7 @@ class MiracastRuntimeHardeningSourceTest {
         assertTrue(renderer.contains("MAX_RECOVERY_UNITS"))
         assertTrue(renderer.contains("recoveryHasIdr"))
         assertTrue(renderer.contains("bufferForSurfaceRecovery"))
-        assertTrue(renderer.contains("replayed $count buffered access units"))
+        assertTrue(renderer.contains("buffered access units after Surface became ready"))
         assertTrue(renderer.contains("containsIdr"))
     }
 }

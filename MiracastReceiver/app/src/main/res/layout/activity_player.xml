@@ -145,7 +145,7 @@
             android:layout_height="58dp"
             android:indeterminate="true"
             android:indeterminateTint="@color/accent"
-            android:visibility="visible" />
+            android:visibility="gone" />
     </LinearLayout>
 
     <TextView

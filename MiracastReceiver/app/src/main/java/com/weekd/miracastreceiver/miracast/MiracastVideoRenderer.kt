@@ -3,20 +3,34 @@ package com.weekd.miracastreceiver.miracast
 import android.view.Surface
 import com.weekd.miracastreceiver.airplay.VideoDecoder
 import timber.log.Timber
+import java.util.ArrayDeque
 
 /**
- * Miracast 视频送显：把 [TsDemuxer] 解出的 H.264 访问单元直接喂给 MediaCodec。
+ * Low-latency Miracast H.264 renderer.
  *
- * 刻意不经过 ExoPlayer —— 播放器的缓冲和时钟同步对第二屏幕这种实时用途是负担，
- * 实测会引入 10 秒以上延迟。这里沿用 AirPlay 镜像同样的做法（见
- * [com.weekd.miracastreceiver.airplay.handshake.MirrorStreamServer]）：收到即解码、解完即送显。
+ * Miracast starts sending RTP as soon as the RTSP PLAY transition completes, while the TV player
+ * Activity/Surface may still be being created. Dropping those first access units is especially
+ * painful when the first IDR is lost: the screen stays black until the Source sends another IDR.
  *
- * H.264 的 SPS/PPS 在 TS 码流里是带内传输的（每个 IDR 前会重复），所以这里先攒够
- * SPS+PPS 才能初始化解码器，在那之前的帧只能丢弃 —— 通常一两百毫秒内就会等到。
- *
- * @param surfaceProvider 取当前可用的 Surface；应用切后台时会返回 null
+ * To close that race we keep a small recovery GOP while the Surface is unavailable. As soon as a
+ * valid Surface arrives, the decoder is configured from the captured SPS/PPS and the buffered GOP
+ * is replayed immediately. The buffer is deliberately bounded so a backgrounded Activity cannot
+ * accumulate unbounded video data.
  */
 class MiracastVideoRenderer(private val surfaceProvider: () -> Surface?) {
+
+    data class Snapshot(
+        val accessUnits: Long,
+        val keyframes: Long,
+        val decoderReady: Boolean,
+        val waitingForSurface: Boolean,
+        val waitingForKeyframe: Boolean,
+        val recoveryBufferedUnits: Int,
+        val recoveryBufferedBytes: Int,
+        val recoveryReplays: Long
+    )
+
+    private data class RecoveryUnit(val data: ByteArray, val ptsUs: Long)
 
     private var decoder: VideoDecoder? = null
     private var configuredSurface: Surface? = null
@@ -25,46 +39,107 @@ class MiracastVideoRenderer(private val surfaceProvider: () -> Surface?) {
     private var awaitingKeyframe = true
     private var droppedBeforeConfig = 0
 
-    /**
-     * 数据有丢失时调用：残缺的帧会让解码器输出花屏，而且错误会沿着帧间预测一直传播下去，
-     * 所以必须丢弃后续帧直到下一个 IDR 才重新开始解码。
-     */
-    fun onDiscontinuity() {
-        if (!awaitingKeyframe) {
-            awaitingKeyframe = true
-            Timber.w("Miracast: data loss detected, waiting for next keyframe")
-        }
+    private val recoveryUnits = ArrayDeque<RecoveryUnit>()
+    private var recoveryBytes = 0
+    private var recoveryHasIdr = false
+
+    @Volatile private var accessUnitsReceived = 0L
+    @Volatile private var keyframesSeen = 0L
+    @Volatile private var recoveryReplays = 0L
+    @Volatile private var waitingForSurface = true
+
+    companion object {
+        private const val MAX_RECOVERY_UNITS = 120
+        private const val MAX_RECOVERY_BYTES = 8 * 1024 * 1024
     }
 
-    /** [TsDemuxer] 的回调入口。 */
+    fun snapshot(): Snapshot = Snapshot(
+        accessUnits = accessUnitsReceived,
+        keyframes = keyframesSeen,
+        decoderReady = decoder != null,
+        waitingForSurface = waitingForSurface,
+        waitingForKeyframe = awaitingKeyframe,
+        recoveryBufferedUnits = recoveryUnits.size,
+        recoveryBufferedBytes = recoveryBytes,
+        recoveryReplays = recoveryReplays
+    )
+
+    /** Corruption/loss invalidates inter-frame references; resume only from a fresh IDR. */
+    fun onDiscontinuity() {
+        if (!awaitingKeyframe) Timber.w("Miracast: data loss detected, waiting for next keyframe")
+        awaitingKeyframe = true
+        clearRecoveryBuffer()
+    }
+
     fun onAccessUnit(unit: ByteArray, ptsUs: Long) {
+        accessUnitsReceived++
         captureParameterSets(unit)
+        val isIdr = containsIdr(unit)
+        if (isIdr) keyframesSeen++
 
         val surface = surfaceProvider()
         if (surface == null || !surface.isValid) {
+            waitingForSurface = true
+            bufferForSurfaceRecovery(unit, ptsUs, isIdr)
             releaseDecoder()
             return
         }
+        waitingForSurface = false
 
-        // Surface 变了（应用切后台再回前台会换新的）就重建解码器，否则画面会一直黑
-        if (decoder == null || surface !== configuredSurface) {
-            if (!rebuildDecoder(surface)) {
-                droppedBeforeConfig++
-                if (droppedBeforeConfig % 60 == 0) {
-                    Timber.d("Miracast: waiting for SPS/PPS, dropped $droppedBeforeConfig units")
-                }
-                return
+        val rebuilt = decoder == null || surface !== configuredSurface
+        if (rebuilt && !rebuildDecoder(surface)) {
+            droppedBeforeConfig++
+            if (droppedBeforeConfig % 60 == 0) {
+                Timber.d("Miracast: waiting for SPS/PPS, dropped $droppedBeforeConfig units")
             }
+            return
         }
 
-        // 新解码器必须从 IDR 开始，否则解出来是花的
+        // If streaming began before PlayerActivity produced a Surface, replay the bounded GOP that
+        // starts with the most recent IDR. This avoids waiting an entire GOP for the next keyframe.
+        if (rebuilt && recoveryHasIdr && recoveryUnits.isNotEmpty()) {
+            val count = recoveryUnits.size
+            while (recoveryUnits.isNotEmpty()) {
+                val buffered = recoveryUnits.removeFirst()
+                recoveryBytes -= buffered.data.size
+                decoder?.decodeNalUnit(buffered.data, buffered.ptsUs)
+            }
+            recoveryHasIdr = false
+            awaitingKeyframe = false
+            recoveryReplays++
+            Timber.i("Miracast: replayed $count buffered access units after Surface became ready")
+        } else if (rebuilt) {
+            clearRecoveryBuffer()
+        }
+
         if (awaitingKeyframe) {
-            if (!containsIdr(unit)) return
+            if (!isIdr) return
             awaitingKeyframe = false
             Timber.i("Miracast: keyframe found, decoding started")
         }
 
         decoder?.decodeNalUnit(unit, ptsUs)
+    }
+
+    private fun bufferForSurfaceRecovery(unit: ByteArray, ptsUs: Long, isIdr: Boolean) {
+        if (isIdr) {
+            clearRecoveryBuffer()
+            recoveryHasIdr = true
+        }
+        if (!recoveryHasIdr) return
+
+        // PES assembler returns independent byte arrays, but copy here to keep this class robust if
+        // that implementation changes later.
+        val copy = unit.copyOf()
+        recoveryUnits.addLast(RecoveryUnit(copy, ptsUs))
+        recoveryBytes += copy.size
+
+        // Never drop the leading IDR and then keep unusable P/B frames. If the recovery GOP grows
+        // too large, discard it and wait for the next IDR instead.
+        if (recoveryUnits.size > MAX_RECOVERY_UNITS || recoveryBytes > MAX_RECOVERY_BYTES) {
+            Timber.w("Miracast: Surface recovery GOP exceeded limit; waiting for next IDR")
+            clearRecoveryBuffer()
+        }
     }
 
     private fun rebuildDecoder(surface: Surface): Boolean {
@@ -80,19 +155,17 @@ class MiracastVideoRenderer(private val surfaceProvider: () -> Surface?) {
         return true
     }
 
-    /** 从访问单元里提取 SPS(type 7) / PPS(type 8)，带起始码保存以便直接作为 csd 使用。 */
     private fun captureParameterSets(unit: ByteArray) {
-        if (sps != null && pps != null) return
         forEachNal(unit) { start, end ->
             val nalType = unit[start].toInt() and 0x1F
             if (nalType == 7 || nalType == 8) {
                 val withStartCode = ByteArray(4 + (end - start))
                 withStartCode[3] = 1
                 System.arraycopy(unit, start, withStartCode, 4, end - start)
-                if (nalType == 7 && sps == null) {
+                if (nalType == 7 && !withStartCode.contentEquals(sps)) {
                     sps = withStartCode
                     Timber.i("Miracast: SPS captured (${end - start} bytes)")
-                } else if (nalType == 8 && pps == null) {
+                } else if (nalType == 8 && !withStartCode.contentEquals(pps)) {
                     pps = withStartCode
                     Timber.i("Miracast: PPS captured (${end - start} bytes)")
                 }
@@ -108,15 +181,13 @@ class MiracastVideoRenderer(private val surfaceProvider: () -> Surface?) {
         return found
     }
 
-    /** 遍历 Annex B 码流里的每个 NAL（回调收到的是去掉起始码后的区间）。 */
     private inline fun forEachNal(data: ByteArray, action: (start: Int, end: Int) -> Unit) {
         var i = 0
         var nalStart = -1
         while (i + 3 <= data.size) {
-            val isStartCode3 = data[i].toInt() == 0 && data[i + 1].toInt() == 0 &&
-                data[i + 2].toInt() == 1
-            val isStartCode4 = i + 4 <= data.size && data[i].toInt() == 0 &&
-                data[i + 1].toInt() == 0 && data[i + 2].toInt() == 0 && data[i + 3].toInt() == 1
+            val isStartCode3 = data[i].toInt() == 0 && data[i + 1].toInt() == 0 && data[i + 2].toInt() == 1
+            val isStartCode4 = i + 4 <= data.size && data[i].toInt() == 0 && data[i + 1].toInt() == 0 &&
+                data[i + 2].toInt() == 0 && data[i + 3].toInt() == 1
             if (isStartCode3 || isStartCode4) {
                 if (nalStart >= 0) action(nalStart, i)
                 i += if (isStartCode4) 4 else 3
@@ -128,6 +199,12 @@ class MiracastVideoRenderer(private val surfaceProvider: () -> Surface?) {
         if (nalStart in 0 until data.size) action(nalStart, data.size)
     }
 
+    private fun clearRecoveryBuffer() {
+        recoveryUnits.clear()
+        recoveryBytes = 0
+        recoveryHasIdr = false
+    }
+
     private fun releaseDecoder() {
         decoder?.release()
         decoder = null
@@ -136,8 +213,10 @@ class MiracastVideoRenderer(private val surfaceProvider: () -> Surface?) {
 
     fun release() {
         releaseDecoder()
+        clearRecoveryBuffer()
         sps = null
         pps = null
         awaitingKeyframe = true
+        waitingForSurface = true
     }
 }

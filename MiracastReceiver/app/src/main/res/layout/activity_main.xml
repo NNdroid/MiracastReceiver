@@ -72,7 +72,6 @@
             android:orientation="vertical">
 
             <TextView android:id="@+id/nav_home" style="@style/TvNavItem" android:text="@string/nav_home" />
-            <TextView android:id="@+id/nav_player" style="@style/TvNavItem" android:layout_marginTop="7dp" android:text="@string/nav_player" />
             <TextView android:id="@+id/nav_settings" style="@style/TvNavItem" android:layout_marginTop="7dp" android:text="@string/nav_settings" />
             <TextView android:id="@+id/nav_about" style="@style/TvNavItem" android:layout_marginTop="7dp" android:text="@string/nav_about" />
         </LinearLayout>

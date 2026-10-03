@@ -4,7 +4,7 @@ plugins {
 
 val releaseStoreFile = System.getenv("ANDROID_SIGNING_STORE_FILE")
 val releaseStorePassword = System.getenv("ANDROID_SIGNING_STORE_PASSWORD")
-val releaseKeyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: System.getenv("ANDROID_SIGNING_KEY_ALIAS")
+val releaseKeyAlias = System.getenv("ANDROID_SIGNING_KEY_ALIAS")
 val releaseKeyPassword = System.getenv("ANDROID_SIGNING_KEY_PASSWORD")
 val releaseSigningConfigured = listOf(
     releaseStoreFile,

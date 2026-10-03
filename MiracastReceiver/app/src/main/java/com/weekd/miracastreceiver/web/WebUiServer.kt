@@ -299,7 +299,22 @@ class WebUiServer(
             RuntimeState.lastError = "URL playback launch failed: $error"
             return sendJson(output, 500, JSONObject().put("error", "player_launch_failed").put("detail", error))
         }
-        RuntimeState.updatePlayback { it.copy(state = "LAUNCHING", title = request.title.ifBlank { request.url }, uri = request.url, source = "WEB_URL", error = "", retryAttempt = 0) }
+        RuntimeState.updatePlayback {
+            it.copy(
+                state = "LAUNCHING",
+                title = request.title.ifBlank { request.url },
+                uri = request.url,
+                positionMs = 0L,
+                durationMs = 0L,
+                isLive = false,
+                isSeekable = false,
+                source = "WEB_URL",
+                error = "",
+                retryAttempt = 0,
+                decoderName = "",
+                hardwareDecoder = false
+            )
+        }
         sendJson(output, 200, JSONObject().put("ok", true).put("url", request.url).put("title", request.title).put("headerCount", request.headers.size))
     }
 
@@ -350,7 +365,21 @@ class WebUiServer(
             .put("service", JSONObject().put("running", RuntimeState.serviceRunning).put("startedAtMs", RuntimeState.serviceStartedAtMs).put("uptimeMs", if (RuntimeState.serviceStartedAtMs > 0) now - RuntimeState.serviceStartedAtMs else 0).put("lastError", RuntimeState.lastError))
             .put("airplay", JSONObject().put("state", RuntimeState.airPlayState).put("sender", RuntimeState.airPlaySender))
             .put("miracast", JSONObject().put("state", RuntimeState.miracastState).put("client", RuntimeState.miracastClient).put("rtpPort", RuntimeState.miracastRtpPort))
-            .put("playback", JSONObject().put("state", playback.state).put("title", playback.title).put("uri", playback.uri).put("positionMs", playback.positionMs).put("durationMs", playback.durationMs).put("speed", playback.speed.toDouble()).put("volume", playback.volume).put("source", playback.source).put("error", playback.error).put("retryAttempt", playback.retryAttempt).put("decoder", RuntimeState.decoderName()).put("hardwareDecoder", RuntimeState.decoderHardwareAccelerated()))
+            .put("playback", JSONObject()
+                .put("state", playback.state)
+                .put("title", playback.title)
+                .put("uri", playback.uri)
+                .put("positionMs", playback.positionMs)
+                .put("durationMs", playback.durationMs)
+                .put("isLive", playback.isLive)
+                .put("isSeekable", playback.isSeekable)
+                .put("speed", playback.speed.toDouble())
+                .put("volume", playback.volume)
+                .put("source", playback.source)
+                .put("error", playback.error)
+                .put("retryAttempt", playback.retryAttempt)
+                .put("decoder", RuntimeState.decoderName())
+                .put("hardwareDecoder", RuntimeState.decoderHardwareAccelerated()))
             .put("privileged", JSONObject().put("root", privileged.rootAvailable).put("magisk", privileged.magiskAvailable).put("shizukuAlive", privileged.shizukuAlive).put("shizukuAuthorized", privileged.shizukuAuthorized).put("bootScriptInstalled", privileged.bootScriptInstalled))
     }
 

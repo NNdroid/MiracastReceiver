@@ -20,6 +20,7 @@ import android.widget.Toast
 import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -173,6 +174,12 @@ class PlayerActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_player)
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                stopPlayback()
+                finish()
+            }
+        })
         initViews()
         handleIntent(intent)
         registerControlReceiver()
@@ -1059,11 +1066,5 @@ class PlayerActivity : AppCompatActivity() {
         cachedPlaylistSignature = emptyList()
         reportPlaybackStopped()
         Timber.i("PlayerActivity destroyed")
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        stopPlayback()
-        super.onBackPressed()
     }
 }

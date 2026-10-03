@@ -271,7 +271,7 @@ class SettingsFragment : Fragment(), MainActivity.TvPage {
             val status = runCatching { PrivilegedAccess.getStatus(appContext) }
                 .onFailure { Timber.w(it, "Unable to refresh privileged status") }
                 .getOrNull() ?: return@launch
-            val overlayAllowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(appContext)
+            val overlayAllowed = Settings.canDrawOverlays(appContext)
             val autoStart = AppSettings.isAutoStartOnBoot(appContext)
             withContext(Dispatchers.Main) {
                 if (!isAdded || view == null || !viewLifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {

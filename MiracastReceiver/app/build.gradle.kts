@@ -25,8 +25,8 @@ android {
         applicationId = "com.weekd.miracastreceiver"
         minSdk = 23
         targetSdk = 36
-        versionCode = 43
-        versionName = "1.13.0"
+        versionCode = 44
+        versionName = "1.13.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "GOOGLE_CAST_APP_ID", "\"$escapedGoogleCastAppId\"")
         ndk { abiFilters += setOf("armeabi-v7a", "arm64-v8a") }

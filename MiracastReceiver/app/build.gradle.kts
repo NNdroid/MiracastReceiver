@@ -63,6 +63,14 @@ android {
         }
     }
 
+    packaging {
+        resources {
+            // Material 1.13 pulls jspecify while BouncyCastle is a multi-release JAR; both ship
+            // this OSGi metadata path. It is not used at runtime on Android, so drop the duplicate.
+            excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+        }
+    }
+
     splits {
         abi {
             isEnable = true

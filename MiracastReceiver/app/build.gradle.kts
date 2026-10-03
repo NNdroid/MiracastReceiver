@@ -4,7 +4,7 @@ plugins {
 
 val releaseStoreFile = System.getenv("ANDROID_SIGNING_STORE_FILE")
 val releaseStorePassword = System.getenv("ANDROID_SIGNING_STORE_PASSWORD")
-val releaseKeyAlias = System.getenv("ANDROID_SIGNING_KEY_ALIAS")
+val releaseKeyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: System.getenv("ANDROID_SIGNING_KEY_ALIAS")
 val releaseKeyPassword = System.getenv("ANDROID_SIGNING_KEY_PASSWORD")
 val releaseSigningConfigured = listOf(
     releaseStoreFile,
@@ -25,8 +25,8 @@ android {
         applicationId = "com.weekd.miracastreceiver"
         minSdk = 23
         targetSdk = 36
-        versionCode = 45
-        versionName = "1.13.2"
+        versionCode = 46
+        versionName = "1.13.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "GOOGLE_CAST_APP_ID", "\"$escapedGoogleCastAppId\"")
         ndk { abiFilters += setOf("armeabi-v7a", "arm64-v8a") }

@@ -1,6 +1,5 @@
 package com.weekd.miracastreceiver.miracast
 
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -12,13 +11,14 @@ class XiaomiMiracastInteropSourceTest {
     private val rootHelper = File("src/main/java/com/weekd/miracastreceiver/miracast/WfdRootHelper.kt").readText()
 
     @Test
-    fun sinkDoesNotForceAutonomousGroupOwnerAtStartup() {
-        assertFalse(wifiDirect.contains("p2p.createGroup("))
-        assertTrue(wifiDirect.contains("prepareForSourceNegotiation()"))
+    fun sinkRestoresAutonomousGroupOwnerForDiscovery() {
+        assertTrue(wifiDirect.contains("p2p.createGroup("))
+        assertTrue(wifiDirect.contains("createOrReuseGroup()"))
+        assertTrue(wifiDirect.contains("autonomousGo=true"))
     }
 
     @Test
-    fun sourceControlPortAndGroupOwnerAddressAreUsedAsHints() {
+    fun sourceControlPortAndGroupOwnerAddressHintsAreStillPreserved() {
         assertTrue(wifiDirect.contains("getControlPort"))
         assertTrue(wifiDirect.contains("source-group-owner"))
         assertTrue(server.contains("WfdSourceHint.snapshot()"))
@@ -29,11 +29,11 @@ class XiaomiMiracastInteropSourceTest {
     }
 
     @Test
-    fun sinkAdvertisesNoRtspServerAndReadsPeerWfdIe() {
-        assertTrue(rootHelper.contains("controlPort: Int = 0"))
+    fun sinkAdvertises7236ButStillReadsRealSourceWfdIe() {
+        assertTrue(rootHelper.contains("controlPort: Int = 7236"))
         assertTrue(rootHelper.contains("P2P_PEER FIRST"))
         assertTrue(rootHelper.contains("parsePeerControlPort"))
-        assertFalse(rootHelper.contains("fun advertiseSink(context: Context, controlPort: Int = 7236)"))
+        assertTrue(rootHelper.contains("fun advertiseSink(context: Context, controlPort: Int = 7236)"))
     }
 
     @Test

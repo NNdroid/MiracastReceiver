@@ -30,6 +30,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
@@ -145,14 +146,18 @@ class PlayerActivity : AppCompatActivity() {
                     finish()
                 }
                 ACTION_SEEK -> {
-                    val position = intent.getLongExtra(EXTRA_SEEK_POSITION, 0L)
-                    player?.seekTo(position)
-                    reportPlaybackPosition()
-                    updateCompactPlaybackMeta()
+                    val currentPlayer = player
+                    if (currentPlayer?.isCurrentMediaItemSeekable == true) {
+                        val position = intent.getLongExtra(EXTRA_SEEK_POSITION, 0L)
+                        currentPlayer.seekTo(position)
+                        reportPlaybackPosition()
+                        updateCompactPlaybackMeta()
+                    }
                 }
                 ACTION_SET_VOLUME -> {
                     val volume = intent.getIntExtra(EXTRA_VOLUME, 50)
                     player?.volume = volume / 100f
+                    reportPlaybackPosition()
                 }
                 ACTION_SET_PLAYLIST -> handleIntent(intent)
                 ACTION_SET_SPEED -> {
@@ -246,6 +251,7 @@ class PlayerActivity : AppCompatActivity() {
                                 tvStatus.text = getString(R.string.playing)
                                 adaptOrientationToVideo()
                                 updateCompactPlaybackMeta()
+                                reportPlaybackPosition()
                                 startProgressUpdates()
                             }
                             Player.STATE_ENDED -> {
@@ -282,6 +288,12 @@ class PlayerActivity : AppCompatActivity() {
                             playbackState == Player.STATE_READY -> "已暂停"
                             else -> return
                         }
+                        reportPlaybackPosition()
+                        updateCompactPlaybackMeta()
+                    }
+
+                    override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+                        reportPlaybackPosition()
                         updateCompactPlaybackMeta()
                     }
 
@@ -372,7 +384,8 @@ class PlayerActivity : AppCompatActivity() {
     private fun formatSpeedLabel(speed: Float): String = if (speed == 1f) "1.0x" else "${speed}x"
 
     private fun handleSeekPress(forward: Boolean) {
-        if (isCurrentImage() || player == null) return
+        val currentPlayer = player ?: return
+        if (isCurrentImage() || !currentPlayer.isCurrentMediaItemSeekable) return
         val now = SystemClock.elapsedRealtime()
         val withinAccelWindow = now - lastSeekPressAt <= SEEK_ACCEL_WINDOW_MS
         seekAccelerationStep = if (withinAccelWindow && forward == lastSeekWasForward) {
@@ -395,6 +408,7 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun previewPendingSeek() {
         val currentPlayer = player ?: return
+        if (!currentPlayer.isCurrentMediaItemSeekable) return
         val duration = currentPlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
         val target = (currentPlayer.currentPosition + pendingSeekDeltaMs).coerceIn(0L, duration)
         val sign = if (pendingSeekDeltaMs >= 0) "+" else "-"
@@ -405,7 +419,7 @@ class PlayerActivity : AppCompatActivity() {
 
     private fun commitPendingSeek() {
         val currentPlayer = player ?: return
-        if (pendingSeekDeltaMs == 0L) return
+        if (!currentPlayer.isCurrentMediaItemSeekable || pendingSeekDeltaMs == 0L) return
         val duration = currentPlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
         val target = (currentPlayer.currentPosition + pendingSeekDeltaMs).coerceIn(0L, duration)
         currentPlayer.seekTo(target)
@@ -760,6 +774,7 @@ class PlayerActivity : AppCompatActivity() {
                 val format = currentPlayer?.videoFormat
                 val videoSize = currentPlayer?.videoSize
                 val parts = mutableListOf("DLNA")
+                if (currentPlayer?.isCurrentMediaItemLive == true) parts += "LIVE"
                 if (playlist.size > 1) parts += "${currentIndex + 1}/${playlist.size}"
                 if ((videoSize?.width ?: 0) > 0 && (videoSize?.height ?: 0) > 0) {
                     parts += "${videoSize!!.width}×${videoSize.height}"
@@ -820,9 +835,15 @@ class PlayerActivity : AppCompatActivity() {
         val bitrateBps = listOfNotNull(format?.bitrate, format?.averageBitrate, format?.peakBitrate)
             .firstOrNull { it != Format.NO_VALUE }?.toLong() ?: 0L
         val bufferedMs = ((currentPlayer?.bufferedPosition ?: 0L) - (currentPlayer?.currentPosition ?: 0L)).coerceAtLeast(0L)
-        val positionText = if ((currentPlayer?.duration ?: 0L) > 0) {
-            "${formatTimeMs(currentPlayer?.currentPosition ?: 0L)} / ${formatTimeMs(currentPlayer?.duration ?: 0L)}"
-        } else "直播 / 未知"
+        val duration = currentPlayer?.duration?.takeIf { it > 0 } ?: 0L
+        val isLive = currentPlayer?.isCurrentMediaItemLive == true
+        val isSeekable = currentPlayer?.isCurrentMediaItemSeekable == true
+        val positionText = when {
+            isLive && isSeekable && duration > 0 -> "直播 / DVR  ${formatTimeMs(currentPlayer?.currentPosition ?: 0L)} / ${formatTimeMs(duration)}"
+            isLive -> "直播"
+            duration > 0 -> "${formatTimeMs(currentPlayer?.currentPosition ?: 0L)} / ${formatTimeMs(duration)}"
+            else -> "时长未知"
+        }
         val extras = listOf(
             "来源" to "DLNA / Media",
             "HDR" to StreamInfoTracker.formatHdr(format),
@@ -837,6 +858,8 @@ class PlayerActivity : AppCompatActivity() {
             "缓冲时长" to formatTimeMs(bufferedMs),
             "缓冲比例" to StreamInfoTracker.formatBufferPercent(currentPlayer?.bufferedPercentage ?: -1),
             "掉帧" to droppedVideoFrames.toString(),
+            "直播" to if (isLive) "是" else "否",
+            "可拖动" to if (isSeekable) "是" else "否",
             "进度" to positionText,
             "播放速度" to String.format("%.2fx", currentPlayer?.playbackParameters?.speed ?: currentSpeed)
         )
@@ -947,6 +970,7 @@ class PlayerActivity : AppCompatActivity() {
                 player?.setPlaybackSpeed(speeds[which])
                 currentSpeed = speeds[which]
                 tvStatus.text = "播放速度：${labels[which]}"
+                reportPlaybackPosition()
                 updateCompactPlaybackMeta()
             }
             .setOnDismissListener { isDialogShowing = false }
@@ -1034,6 +1058,10 @@ class PlayerActivity : AppCompatActivity() {
             putExtra("position", position)
             putExtra("duration", duration)
             putExtra("is_playing", currentPlayer.isPlaying)
+            putExtra("is_live", currentPlayer.isCurrentMediaItemLive)
+            putExtra("is_seekable", currentPlayer.isCurrentMediaItemSeekable)
+            putExtra("volume", (currentPlayer.volume * 100).toInt().coerceIn(0, 100))
+            putExtra("speed", currentPlayer.playbackParameters.speed)
             setPackage(packageName)
         }
         sendBroadcast(intent)

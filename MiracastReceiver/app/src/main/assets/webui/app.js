@@ -58,7 +58,7 @@ function fmtDuration(ms){const s=Math.max(0,Math.floor((Number(ms)||0)/1000));if
 function browserPort(){return Number(location.port||(location.protocol==='https:'?443:80));}
 function connectionFamily(){return location.hostname.includes(':')?'IPv6':'IPv4';}
 function hostWithPort(port,includeAuth=true){const host=location.hostname.includes(':')?`[${location.hostname}]`:location.hostname;const base=`${location.protocol}//${host}:${port}/`;return includeAuth&&token?`${base}#token=${encodeURIComponent(token)}`:base;}
-function activePlayback(p){return new Set(['PLAYING','READY','BUFFERING','RETRYING','LAUNCHING','PAUSED']).has(String(p?.state||'').toUpperCase());}
+function activePlayback(p){return new Set(['PLAYING','READY','BUFFERING','RETRYING','LAUNCHING','PAUSED','MIRRORING']).has(String(p?.state||'').toUpperCase());}
 function safeSource(p){const source=(p?.source||'').trim();if(source)return source;try{return p?.uri?new URL(p.uri).host:'-';}catch(_){return p?.uri||'-';}}
 function runtimeStateLabel(enabled,state){if(enabled===false)return t('disabled');const s=String(state||'IDLE').toUpperCase();return s==='IDLE'||s==='STOPPED'||s==='WAITING'?t('idle'):state||t('idle');}
 
@@ -89,7 +89,11 @@ function renderStatus(s){
   const decoder=isActive?(p.decoder||''):'';$('decoderState').textContent=decoder?`${decoder}${p.hardwareDecoder?' · HW':' · '+t('softwareFallback')}`:t('waitingVideo');
   $('rootState').textContent=s.privileged?.magisk?'Magisk Root':(s.privileged?.root?'Root':t('unavailable'));$('shizukuState').textContent=s.privileged?.shizukuAuthorized?t('authorized'):(s.privileged?.shizukuAlive?t('waitingAuthorization'):t('notConnected'));$('bootState').textContent=s.privileged?.bootScriptInstalled?t('bootInstalled'):'Android BootReceiver';$('lastError').textContent=s.service?.lastError||t('none');
   $('nowTitle').textContent=isActive?(p.title||t('active')):t('nothingPlaying');const retryText=p.retryAttempt?` · ${t('retry',{n:p.retryAttempt})}`:'';$('nowSource').textContent=isActive?`${safeSource(p)}${retryText}`:'-';$('nowSource').title=p.uri||'';
-  const duration=Number(p.durationMs)||0,position=Number(p.positionMs)||0;if(duration>0){$('progressText').textContent=`${fmtTime(position)} / ${fmtTime(duration)}`;$('progressFill').style.width=`${Math.min(100,Math.max(0,position/duration*100))}%`;$('progressFill').classList.remove('live');}else if(isActive){$('progressText').textContent=`${t('live')} · ${fmtTime(position)}`;$('progressFill').style.width='100%';$('progressFill').classList.add('live');}else{$('progressText').textContent='—';$('progressFill').style.width='0';$('progressFill').classList.remove('live');}
+  const duration=Number(p.durationMs)||0,position=Number(p.positionMs)||0,isLive=!!p.isLive,isSeekable=!!p.isSeekable;
+  if(isLive){if(isSeekable&&duration>0){$('progressText').textContent=`${t('live')} · ${fmtTime(position)} / ${fmtTime(duration)}`;$('progressFill').style.width=`${Math.min(100,Math.max(0,position/duration*100))}%`;}else{$('progressText').textContent=`${t('live')}${position>0?` · ${fmtTime(position)}`:''}`;$('progressFill').style.width='100%';}$('progressFill').classList.add('live');}
+  else if(duration>0){$('progressText').textContent=`${fmtTime(position)} / ${fmtTime(duration)}`;$('progressFill').style.width=`${Math.min(100,Math.max(0,position/duration*100))}%`;$('progressFill').classList.remove('live');}
+  else if(isActive){$('progressText').textContent=`${t('unknownDuration')}${position>0?` · ${fmtTime(position)}`:''}`;$('progressFill').style.width='0';$('progressFill').classList.remove('live');}
+  else{$('progressText').textContent='—';$('progressFill').style.width='0';$('progressFill').classList.remove('live');}
   $('activeDecoder').textContent=decoder||'—';$('activeHardware').textContent=decoder?(p.hardwareDecoder?t('hardwareYes'):t('hardwareNo')):'—';
   if(document.activeElement!==$('volumeValue'))$('volumeValue').value=Number.isFinite(Number(p.volume))?p.volume:100;if(document.activeElement!==$('speedValue'))$('speedValue').value=Number(p.speed)||1;
 }

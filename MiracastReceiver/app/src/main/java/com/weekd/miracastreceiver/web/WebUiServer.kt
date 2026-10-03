@@ -282,7 +282,11 @@ class WebUiServer(
             return sendJson(output, 400, JSONObject().put("error", it.message ?: "invalid_media_request"))
         }
 
-        appContext.sendBroadcast(Intent(PlayerActivity.ACTION_STOP).setPackage(appContext.packageName))
+        val currentSource = RuntimeState.playbackSnapshot().source.uppercase()
+        val reusingUrlPlayer = currentSource == "WEB_URL" || currentSource == "GOOGLE_CAST"
+        if (!reusingUrlPlayer) {
+            appContext.sendBroadcast(Intent(PlayerActivity.ACTION_STOP).setPackage(appContext.packageName))
+        }
         val intent = Intent(appContext, UrlPlaybackActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
             putExtra(UrlPlaybackActivity.EXTRA_URL, request.url)

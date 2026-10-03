@@ -1,5 +1,6 @@
 package com.weekd.miracastreceiver.miracast
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -11,10 +12,20 @@ class XiaomiMiracastInteropSourceTest {
     private val rootHelper = File("src/main/java/com/weekd/miracastreceiver/miracast/WfdRootHelper.kt").readText()
 
     @Test
-    fun sinkRestoresAutonomousGroupOwnerForDiscovery() {
-        assertTrue(wifiDirect.contains("p2p.createGroup("))
-        assertTrue(wifiDirect.contains("createOrReuseGroup()"))
-        assertTrue(wifiDirect.contains("autonomousGo=true"))
+    fun sinkPrefersSourceOwnedGroupInsteadOfAutonomousGo() {
+        assertTrue(wifiDirect.contains("prepareForSourceOwnedGroup()"))
+        assertTrue(wifiDirect.contains("topology=source-go-preferred"))
+        assertTrue(wifiDirect.contains("Removing stale empty autonomous GO"))
+        assertTrue(wifiDirect.contains("Source can become Group Owner"))
+        assertFalse(wifiDirect.contains("p2p.createGroup("))
+        assertFalse(wifiDirect.contains("autonomousGo=true"))
+    }
+
+    @Test
+    fun activeGroupsArePreservedWhileOnlyEmptySinkGoIsRemoved() {
+        assertTrue(wifiDirect.contains("existing.isGroupOwner && existing.clientList.isEmpty()"))
+        assertTrue(wifiDirect.contains("Preserving active P2P group"))
+        assertTrue(wifiDirect.contains("existing.clientList.size"))
     }
 
     @Test

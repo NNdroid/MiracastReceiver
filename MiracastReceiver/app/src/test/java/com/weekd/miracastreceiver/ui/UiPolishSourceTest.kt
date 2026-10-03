@@ -16,6 +16,7 @@ class UiPolishSourceTest {
         assertTrue(mainLayout.contains("android:text=\"MR\""))
         assertTrue(styles.contains("@drawable/bg_tv_nav_item"))
         assertTrue(styles.contains("android:layout_height\">64dp"))
+        assertTrue(styles.contains("Theme.Material3.DayNight.NoActionBar"))
     }
 
     @Test
@@ -23,8 +24,11 @@ class UiPolishSourceTest {
         assertTrue(webCss.contains(".app-shell"))
         assertTrue(webCss.contains(".hero"))
         assertTrue(webCss.contains(".metric-grid"))
-        assertTrue(webCss.contains(":root[data-theme=\"light\"]"))
-        assertTrue(webCss.contains(":root[data-theme=\"dark\"]"))
+        assertTrue(webCss.contains("html[data-theme=\"light\"]"))
+        assertTrue(webCss.contains("html[data-theme=\"dark\"]"))
+        assertTrue(webCss.contains("prefers-color-scheme:light"))
+        assertTrue(webCss.contains("backdrop-filter:blur"))
+        assertTrue(webCss.contains("@supports not"))
         assertTrue(webCss.contains("@media(max-width:820px)"))
         assertTrue(webCss.contains("@media(max-width:520px)"))
         assertTrue(webCss.contains("body.stale:after"))

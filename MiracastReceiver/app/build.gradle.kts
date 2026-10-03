@@ -26,15 +26,11 @@ android {
         applicationId = "com.weekd.miracastreceiver"
         minSdk = 21
         targetSdk = 36
-        versionCode = 41
-        versionName = "1.11.2"
-
+        versionCode = 42
+        versionName = "1.12.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "GOOGLE_CAST_APP_ID", "\"$escapedGoogleCastAppId\"")
-
-        ndk {
-            abiFilters += setOf("armeabi-v7a", "arm64-v8a")
-        }
+        ndk { abiFilters += setOf("armeabi-v7a", "arm64-v8a") }
     }
 
     signingConfigs {
@@ -62,13 +58,16 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            if (releaseSigningConfigured) {
-                signingConfig = signingConfigs.getByName("release")
-            }
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            if (releaseSigningConfigured) signingConfig = signingConfigs.getByName("release")
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
+
+    packaging {
+        resources {
+            // Material 1.13 pulls jspecify while BouncyCastle is a multi-release JAR; both ship
+            // this OSGi metadata path. It is not used at runtime on Android, so drop the duplicate.
+            excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
         }
     }
 
@@ -90,11 +89,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
+    kotlinOptions { jvmTarget = "17" }
     buildFeatures {
         viewBinding = true
         buildConfig = true
@@ -104,35 +99,27 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("com.google.android.material:material:1.12.0")
+    // 1.13.0 is the newest stable Material Components release that still supports minSdk 21.
+    // 1.14.0 adds Material 3 Expressive but raises minSdk to 23.
+    implementation("com.google.android.material:material:1.13.0")
     implementation("androidx.constraintlayout:constraintlayout:2.2.0")
-
     implementation("androidx.leanback:leanback:1.2.0-alpha04")
     implementation("androidx.tvprovider:tvprovider:1.1.0-alpha01")
-
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-livedata-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-process:2.8.7")
     implementation("androidx.media:media:1.7.0")
-
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
-
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
-
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.retrofit2:retrofit:2.11.0")
     implementation("com.squareup.retrofit2:converter-gson:2.11.0")
     implementation("com.google.code.gson:gson:2.11.0")
-
-    // Google Cast Connect versions compatible with minSdk 21. Google raised the sender Cast
-    // library minSdk to 23 in the 22.x line, while 21.4.0 / Cast TV 21.0.1 require only API 19.
     implementation("com.google.android.gms:play-services-cast-tv:21.0.1")
     implementation("com.google.android.gms:play-services-cast:21.4.0")
-
-    // 1.9+ raises Media3 minSdk to 23. Keep the newest stable line compatible with our minSdk 21.
     val media3Version = "1.8.1"
     implementation("androidx.media3:media3-exoplayer:$media3Version")
     implementation("androidx.media3:media3-exoplayer-hls:$media3Version")
@@ -140,14 +127,11 @@ dependencies {
     implementation("androidx.media3:media3-datasource-okhttp:$media3Version")
     implementation("androidx.media3:media3-ui:$media3Version")
     implementation("androidx.media3:media3-common:$media3Version")
-
     implementation("org.webrtc:google-webrtc:1.0.32006")
     implementation("com.jakewharton.timber:timber:5.0.1")
     implementation("com.google.zxing:core:3.5.3")
-
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
     implementation("com.googlecode.plist:dd-plist:1.28")
-
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")

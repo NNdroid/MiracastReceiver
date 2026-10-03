@@ -17,8 +17,9 @@ class WebUiThemeDualStackSourceTest {
         assertTrue(index.contains("localStorage.getItem('webuiTheme')"))
         assertTrue(app.contains("themePreference=localStorage.getItem('webuiTheme')"))
         assertTrue(app.contains("function applyTheme()"))
-        assertTrue(css.contains(":root[data-theme=\"light\"]"))
-        assertTrue(css.contains(":root[data-theme=\"dark\"]"))
+        assertTrue(css.contains("html[data-theme=\"light\"]"))
+        assertTrue(css.contains("html[data-theme=\"dark\"]"))
+        assertTrue(css.contains("prefers-color-scheme:light"))
     }
 
     @Test

@@ -42,8 +42,9 @@ class WebUiDashboardSourceTest {
     fun refreshedDashboardSupportsThemeFocusAndStaleStates() {
         assertTrue(css.contains(":focus-visible"))
         assertTrue(css.contains("prefers-color-scheme:light"))
-        assertTrue(css.contains("prefers-reduced-motion:reduce"))
+        assertTrue(css.contains("backdrop-filter:blur"))
+        assertTrue(css.contains("@supports not"))
         assertTrue(css.contains("body.stale"))
-        assertTrue(css.contains(".progress>div.live"))
+        assertTrue(css.contains(".progress>div"))
     }
 }

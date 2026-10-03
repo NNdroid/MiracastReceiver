@@ -16,9 +16,10 @@ import timber.log.Timber
 /**
  * Wi-Fi Direct manager used by the Miracast sink.
  *
- * Miracast sources discover sinks from the WFD IE carried by P2P discovery frames. A rooted TV
- * therefore prepares the WFD IE and Extended Listen state before the framework creates/restores
- * the P2P group. Framework peer discovery is also kept active as a non-root/system-app fallback.
+ * Discovery and connection topology are intentionally separate:
+ * - WFD IE + Extended Listen make the sink discoverable.
+ * - We do not pre-create an autonomous GO. Android/MIUI/HyperOS Sources normally need to become
+ *   the P2P Group Owner so their RTSP Source server is reachable by the Sink reverse-RTSP client.
  */
 class WifiDirectManager(
     private val context: Context,
@@ -82,16 +83,10 @@ class WifiDirectManager(
             registerReceiver()
             setWfdInfo()
             registerLocalService()
-
-            // Xiaomi/HyperOS discovery is measurably more reliable when the TV is already an
-            // autonomous GO, which is the behavior used by the last known-good discovery build.
-            // Keep all newer Source-IP/control-port learning in the connection path, but restore
-            // the discoverability topology here instead of removing an empty group at startup.
-            createOrReuseGroup()
-            startPeerDiscovery()
+            prepareForSourceOwnedGroup()
 
             if (!rootAdvertised) WfdRootHelper.refreshAdvertisingAsync(appContext)
-            Timber.i("Wi-Fi Direct started for Miracast (rootWfd=$rootAdvertised, autonomousGo=true)")
+            Timber.i("Wi-Fi Direct started for Miracast (rootWfd=$rootAdvertised, topology=source-go-preferred)")
         } catch (e: Exception) {
             frameworkStarted = false
             Timber.e(e, "Failed to start Wi-Fi Direct")
@@ -135,51 +130,52 @@ class WifiDirectManager(
         }
     }
 
-    private fun createOrReuseGroup() {
+    /**
+     * Remove only a stale/empty autonomous GO group. A real active group is never torn down here.
+     * This lets a phone Source own the next negotiation and therefore expose its RTSP server.
+     */
+    private fun prepareForSourceOwnedGroup() {
         val p2p = p2pManager() ?: return
         val ch = channel ?: return
         try {
             p2p.requestGroupInfo(ch) { existing ->
                 if (!isStarted) return@requestGroupInfo
-                if (existing != null) {
-                    Timber.i("Reusing P2P group ${existing.networkName}; owner=${existing.isGroupOwner}")
-                    onGroupReady(existing)
-                    return@requestGroupInfo
+                when {
+                    existing == null -> {
+                        Timber.i("P2P topology ready: no pre-created group; waiting for Source GO")
+                        startPeerDiscovery()
+                    }
+                    existing.isGroupOwner && existing.clientList.isEmpty() -> {
+                        Timber.i("Removing stale empty autonomous GO ${existing.networkName} before Miracast negotiation")
+                        p2p.removeGroup(ch, object : WifiP2pManager.ActionListener {
+                            override fun onSuccess() {
+                                Timber.i("Empty autonomous GO removed; Source can become Group Owner")
+                                WfdRootHelper.refreshAdvertisingAsync(appContext)
+                                startPeerDiscovery()
+                            }
+
+                            override fun onFailure(reason: Int) {
+                                Timber.w("Unable to remove stale autonomous GO: ${reasonText(reason)}")
+                                startPeerDiscovery()
+                            }
+                        })
+                    }
+                    else -> {
+                        Timber.i(
+                            "Preserving active P2P group ${existing.networkName}; " +
+                                "sinkIsOwner=${existing.isGroupOwner}; clients=${existing.clientList.size}"
+                        )
+                        onGroupReady(existing)
+                        startPeerDiscovery()
+                    }
                 }
-                createGroup(p2p, ch)
             }
         } catch (e: SecurityException) {
             Timber.w("Cannot query P2P group; missing nearby/location permission")
-            createGroup(p2p, ch)
+            startPeerDiscovery()
         } catch (e: Exception) {
-            Timber.w(e, "Unable to query P2P group")
-            createGroup(p2p, ch)
-        }
-    }
-
-    private fun createGroup(p2p: WifiP2pManager, ch: WifiP2pManager.Channel) {
-        try {
-            p2p.createGroup(ch, object : WifiP2pManager.ActionListener {
-                override fun onSuccess() {
-                    Timber.i("Wi-Fi Direct autonomous group created")
-                    p2p.requestGroupInfo(ch) { group -> if (group != null) onGroupReady(group) }
-                    startPeerDiscovery()
-                    WfdRootHelper.refreshAdvertisingAsync(appContext)
-                }
-
-                override fun onFailure(reason: Int) {
-                    Timber.w("P2P createGroup failed: ${reasonText(reason)}")
-                    if (reason == WifiP2pManager.BUSY) {
-                        p2p.requestGroupInfo(ch) { group -> if (group != null) onGroupReady(group) }
-                    }
-                    startPeerDiscovery()
-                    WfdRootHelper.refreshAdvertisingAsync(appContext)
-                }
-            })
-        } catch (e: SecurityException) {
-            Timber.w("Cannot create P2P group; missing nearby/location permission")
-        } catch (e: Exception) {
-            Timber.w(e, "Exception while creating P2P group")
+            Timber.w(e, "Unable to prepare Source-owned P2P topology")
+            startPeerDiscovery()
         }
     }
 
@@ -302,8 +298,7 @@ class WifiDirectManager(
                         Timber.i("Wi-Fi P2P state: ${if (enabled) "ENABLED" else "DISABLED"}")
                         if (enabled && isStarted) {
                             WfdRootHelper.refreshAdvertisingAsync(appContext)
-                            createOrReuseGroup()
-                            startPeerDiscovery()
+                            prepareForSourceOwnedGroup()
                         }
                     }
                     WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION -> requestPeersForDiagnostics()
@@ -356,6 +351,11 @@ class WifiDirectManager(
                     Timber.i("P2P connected; sinkIsOwner=${info.isGroupOwner}; GO=$goIp")
                     if (!info.isGroupOwner && !goIp.isNullOrBlank()) {
                         WfdSourceHint.update(ipAddress = goIp, reason = "source-group-owner")
+                    } else if (info.isGroupOwner) {
+                        Timber.w(
+                            "Miracast group formed with Sink as GO. Some Android/HyperOS Sources " +
+                                "do not expose their RTSP server in this topology."
+                        )
                     }
                     p2p.requestGroupInfo(ch) { group -> if (group != null) onGroupReady(group) }
                 } else {
@@ -363,8 +363,7 @@ class WifiDirectManager(
                     onDeviceDisconnected?.invoke()
                     if (isStarted) {
                         WfdRootHelper.refreshAdvertisingAsync(appContext)
-                        createOrReuseGroup()
-                        startPeerDiscovery()
+                        prepareForSourceOwnedGroup()
                     }
                 }
             }

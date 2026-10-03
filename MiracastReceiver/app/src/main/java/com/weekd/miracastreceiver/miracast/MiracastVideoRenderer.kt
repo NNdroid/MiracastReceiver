@@ -95,8 +95,6 @@ class MiracastVideoRenderer(private val surfaceProvider: () -> Surface?) {
             return
         }
 
-        // If streaming began before PlayerActivity produced a Surface, replay the bounded GOP that
-        // starts with the most recent IDR. This avoids waiting an entire GOP for the next keyframe.
         if (rebuilt && recoveryHasIdr && recoveryUnits.isNotEmpty()) {
             val count = recoveryUnits.size
             while (recoveryUnits.isNotEmpty()) {
@@ -128,14 +126,10 @@ class MiracastVideoRenderer(private val surfaceProvider: () -> Surface?) {
         }
         if (!recoveryHasIdr) return
 
-        // PES assembler returns independent byte arrays, but copy here to keep this class robust if
-        // that implementation changes later.
         val copy = unit.copyOf()
         recoveryUnits.addLast(RecoveryUnit(copy, ptsUs))
         recoveryBytes += copy.size
 
-        // Never drop the leading IDR and then keep unusable P/B frames. If the recovery GOP grows
-        // too large, discard it and wait for the next IDR instead.
         if (recoveryUnits.size > MAX_RECOVERY_UNITS || recoveryBytes > MAX_RECOVERY_BYTES) {
             Timber.w("Miracast: Surface recovery GOP exceeded limit; waiting for next IDR")
             clearRecoveryBuffer()
@@ -162,10 +156,10 @@ class MiracastVideoRenderer(private val surfaceProvider: () -> Surface?) {
                 val withStartCode = ByteArray(4 + (end - start))
                 withStartCode[3] = 1
                 System.arraycopy(unit, start, withStartCode, 4, end - start)
-                if (nalType == 7 && !withStartCode.contentEquals(sps)) {
+                if (nalType == 7 && sps?.contentEquals(withStartCode) != true) {
                     sps = withStartCode
                     Timber.i("Miracast: SPS captured (${end - start} bytes)")
-                } else if (nalType == 8 && !withStartCode.contentEquals(pps)) {
+                } else if (nalType == 8 && pps?.contentEquals(withStartCode) != true) {
                     pps = withStartCode
                     Timber.i("Miracast: PPS captured (${end - start} bytes)")
                 }

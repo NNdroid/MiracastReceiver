@@ -94,9 +94,14 @@ class CastReceiverService : Service() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
                 ACTION_UPDATE_POSITION -> {
-                    val position = intent.getLongExtra("position", 0L)
-                    val duration = intent.getLongExtra("duration", 0L)
+                    val current = RuntimeState.playbackSnapshot()
+                    val position = intent.getLongExtra("position", current.positionMs)
+                    val duration = intent.getLongExtra("duration", current.durationMs)
                     val isPlaying = intent.getBooleanExtra("is_playing", false)
+                    val isLive = if (intent.hasExtra("is_live")) intent.getBooleanExtra("is_live", false) else current.isLive
+                    val isSeekable = if (intent.hasExtra("is_seekable")) intent.getBooleanExtra("is_seekable", false) else current.isSeekable
+                    val volume = if (intent.hasExtra("volume")) intent.getIntExtra("volume", current.volume).coerceIn(0, 100) else current.volume
+                    val speed = if (intent.hasExtra("speed")) intent.getFloatExtra("speed", current.speed).coerceIn(0.25f, 4f) else current.speed
                     val title = intent.getStringExtra("title").orEmpty()
                     val uri = intent.getStringExtra("uri").orEmpty()
                     val source = intent.getStringExtra("source").orEmpty()
@@ -105,13 +110,22 @@ class CastReceiverService : Service() {
                         dlnaRenderer.updatePosition(position, duration)
                         if (isPlaying) dlnaRenderer.setPlaying() else dlnaRenderer.setPaused()
                     }
-                    RuntimeState.playbackPositionMs = position
-                    RuntimeState.playbackDurationMs = duration
-                    RuntimeState.playbackState = if (isPlaying) "PLAYING" else "PAUSED"
-                    if (title.isNotBlank()) RuntimeState.playbackTitle = title
-                    if (uri.isNotBlank()) RuntimeState.playbackUri = uri
-                    if (source.isNotBlank()) RuntimeState.playbackSource = source
-                    if (source == "DLNA" && (duration > 0L || uri.isNotBlank())) {
+                    RuntimeState.updatePlayback { old ->
+                        old.copy(
+                            positionMs = position,
+                            durationMs = duration,
+                            isLive = isLive,
+                            isSeekable = isSeekable,
+                            speed = speed,
+                            volume = volume,
+                            state = if (isPlaying) "PLAYING" else "PAUSED",
+                            title = title.ifBlank { old.title },
+                            uri = uri.ifBlank { old.uri },
+                            source = source.ifBlank { old.source }
+                        )
+                    }
+                    val activeSource = source.ifBlank { RuntimeState.playbackSnapshot().source }
+                    if (activeSource == "DLNA" && (duration > 0L || uri.isNotBlank() || position > 0L)) {
                         setPlaybackSourceActive("dlna", true)
                     }
                 }
@@ -192,9 +206,19 @@ class CastReceiverService : Service() {
                 RuntimeState.airPlayState = state.name
                 Timber.i("AirPlay state: $state")
                 if (state == AirPlayState.CONNECTED) {
-                    RuntimeState.playbackState = "MIRRORING"
-                    RuntimeState.playbackSource = "AirPlay"
-                    RuntimeState.playbackTitle = "iPhone 屏幕镜像"
+                    RuntimeState.updatePlayback {
+                        it.copy(
+                            state = "MIRRORING",
+                            source = "AirPlay",
+                            title = "iPhone 屏幕镜像",
+                            positionMs = 0L,
+                            durationMs = 0L,
+                            isLive = true,
+                            isSeekable = false,
+                            decoderName = "",
+                            hardwareDecoder = false
+                        )
+                    }
                     setPlaybackSourceActive("airplay", true)
                     if (!airPlayPlayerStarted && AppSettings.isAutoLaunchPlayer(this)) {
                         airPlayPlayerStarted = true
@@ -265,9 +289,19 @@ class CastReceiverService : Service() {
             onStreamStarted = { rtpPort ->
                 RuntimeState.miracastState = "STREAMING"
                 RuntimeState.miracastRtpPort = rtpPort
-                RuntimeState.playbackState = "MIRRORING"
-                RuntimeState.playbackSource = "Miracast"
-                RuntimeState.playbackTitle = "Windows 无线显示器"
+                RuntimeState.updatePlayback {
+                    it.copy(
+                        state = "MIRRORING",
+                        source = "Miracast",
+                        title = "Windows 无线显示器",
+                        positionMs = 0L,
+                        durationMs = 0L,
+                        isLive = true,
+                        isSeekable = false,
+                        decoderName = "",
+                        hardwareDecoder = false
+                    )
+                }
                 setPlaybackSourceActive("miracast", true)
                 Timber.i("Miracast stream started on RTP port: $rtpPort")
             }
@@ -304,9 +338,19 @@ class CastReceiverService : Service() {
 
         dlnaRenderer.onSetUri = { uri, metadata ->
             val title = extractTitle(metadata)
-            RuntimeState.playbackUri = uri
-            RuntimeState.playbackTitle = title
-            RuntimeState.playbackSource = "DLNA"
+            RuntimeState.updatePlayback {
+                it.copy(
+                    uri = uri,
+                    title = title,
+                    source = "DLNA",
+                    positionMs = 0L,
+                    durationMs = 0L,
+                    isLive = false,
+                    isSeekable = false,
+                    decoderName = "",
+                    hardwareDecoder = false
+                )
+            }
             Timber.i("DLNA SetURI: $uri")
 
             if (AppSettings.isAutoLaunchPlayer(this)) {

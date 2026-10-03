@@ -22,6 +22,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.Timeline
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.okhttp.OkHttpDataSource
@@ -118,8 +119,12 @@ class UrlPlaybackActivity : AppCompatActivity() {
                 PlayerActivity.ACTION_PAUSE -> player?.pause()
                 PlayerActivity.ACTION_STOP -> { player?.stop(); finish() }
                 PlayerActivity.ACTION_SEEK -> {
-                    player?.seekTo(intent.getLongExtra(PlayerActivity.EXTRA_SEEK_POSITION, 0L).coerceAtLeast(0L))
-                    updatePlaybackMeta()
+                    val current = player
+                    if (current?.isCurrentMediaItemSeekable == true) {
+                        current.seekTo(intent.getLongExtra(PlayerActivity.EXTRA_SEEK_POSITION, 0L).coerceAtLeast(0L))
+                        updateSnapshot()
+                        updatePlaybackMeta()
+                    }
                 }
                 PlayerActivity.ACTION_SET_VOLUME -> {
                     val volume = intent.getIntExtra(PlayerActivity.EXTRA_VOLUME, 100).coerceIn(0, 100)
@@ -210,6 +215,7 @@ class UrlPlaybackActivity : AppCompatActivity() {
             RuntimeState.updatePlayback {
                 it.copy(title = currentTitle, uri = currentUrl, source = "WEB_URL", error = "")
             }
+            updateSnapshot()
             startProgressUpdates()
             return
         }
@@ -225,7 +231,20 @@ class UrlPlaybackActivity : AppCompatActivity() {
         exo.prepare()
 
         RuntimeState.updatePlayback {
-            it.copy(state = "BUFFERING", title = currentTitle, uri = currentUrl, source = "WEB_URL", error = "", retryAttempt = 0)
+            it.copy(
+                state = "BUFFERING",
+                title = currentTitle,
+                uri = currentUrl,
+                positionMs = 0L,
+                durationMs = 0L,
+                isLive = false,
+                isSeekable = false,
+                source = "WEB_URL",
+                error = "",
+                retryAttempt = 0,
+                decoderName = "",
+                hardwareDecoder = false
+            )
         }
         startProgressUpdates()
     }
@@ -295,6 +314,12 @@ class UrlPlaybackActivity : AppCompatActivity() {
                     updateDetailedInfoIfVisible()
                     updateSnapshot(if (isPlaying) "PLAYING" else "PAUSED")
                 }
+            }
+
+            override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+                updateSnapshot()
+                updatePlaybackMeta()
+                updateDetailedInfoIfVisible()
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -378,6 +403,7 @@ class UrlPlaybackActivity : AppCompatActivity() {
     private fun updatePlaybackMeta() {
         val exo = player
         val parts = mutableListOf(sourceLabel())
+        if (exo?.isCurrentMediaItemLive == true) parts += "LIVE"
         if (lastHttpProtocol != "—") parts += lastHttpProtocol
         val videoSize = exo?.videoSize
         if ((videoSize?.width ?: 0) > 0 && (videoSize?.height ?: 0) > 0) {
@@ -424,6 +450,8 @@ class UrlPlaybackActivity : AppCompatActivity() {
         val bufferedMs = ((exo?.bufferedPosition ?: 0L) - (exo?.currentPosition ?: 0L)).coerceAtLeast(0L)
         val duration = exo?.duration?.takeIf { it > 0 } ?: 0L
         val position = exo?.currentPosition ?: 0L
+        val isLive = exo?.isCurrentMediaItemLive == true
+        val isSeekable = exo?.isCurrentMediaItemSeekable == true
         val rows = listOf(
             "来源" to sourceLabel(),
             "HTTP" to lastHttpProtocol,
@@ -444,7 +472,14 @@ class UrlPlaybackActivity : AppCompatActivity() {
             "缓冲时长" to formatTimeMs(bufferedMs),
             "缓冲比例" to StreamInfoTracker.formatBufferPercent(exo?.bufferedPercentage ?: -1),
             "掉帧" to droppedVideoFrames.toString(),
-            "进度" to if (duration > 0) "${formatTimeMs(position)} / ${formatTimeMs(duration)}" else "直播 / 未知",
+            "直播" to if (isLive) "是" else "否",
+            "可拖动" to if (isSeekable) "是" else "否",
+            "进度" to when {
+                isLive && isSeekable && duration > 0 -> "直播 / DVR  ${formatTimeMs(position)} / ${formatTimeMs(duration)}"
+                isLive -> "直播"
+                duration > 0 -> "${formatTimeMs(position)} / ${formatTimeMs(duration)}"
+                else -> "时长未知"
+            },
             "播放速度" to String.format("%.2fx", exo?.playbackParameters?.speed ?: 1f)
         )
         return rows.joinToString("\n", prefix = "视频信息\n") { (label, value) ->
@@ -548,6 +583,8 @@ class UrlPlaybackActivity : AppCompatActivity() {
                 uri = currentUrl,
                 positionMs = exo?.currentPosition?.coerceAtLeast(0L) ?: old.positionMs,
                 durationMs = exo?.duration?.takeIf { it > 0 } ?: 0L,
+                isLive = exo?.isCurrentMediaItemLive == true,
+                isSeekable = exo?.isCurrentMediaItemSeekable == true,
                 speed = exo?.playbackParameters?.speed ?: old.speed,
                 volume = ((exo?.volume ?: 1f) * 100).toInt().coerceIn(0, 100),
                 source = "WEB_URL",

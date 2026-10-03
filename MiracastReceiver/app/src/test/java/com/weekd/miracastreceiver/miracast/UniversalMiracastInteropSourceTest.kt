@@ -41,7 +41,10 @@ class UniversalMiracastInteropSourceTest {
 
     @Test
     fun rtpReceiverHandlesReorderingWithoutHugeFalseLoss() {
-        assertTrue(rtp.contains("lost in 1..0x7FFF"))
-        assertTrue(rtp.contains("reordered/old packet"))
+        assertTrue(rtp.contains("REORDER_WINDOW_PACKETS"))
+        assertTrue(rtp.contains("REORDER_MAX_WAIT_MS"))
+        assertTrue(rtp.contains("pending.putIfAbsent"))
+        assertTrue(rtp.contains("skipConfirmedGap"))
+        assertTrue(rtp.contains("packetsLateOrDuplicate"))
     }
 }

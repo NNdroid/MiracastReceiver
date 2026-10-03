@@ -10,12 +10,12 @@ class VisualThemeSourceTest {
     private val webCss = File("src/main/assets/webui/styles.css").readText()
 
     @Test
-    fun tvThemeUsesMaterial3WithoutDroppingApi21() {
+    fun tvThemeUsesMaterial3OnApi23Baseline() {
         assertTrue(styles.contains("Theme.Material3.DayNight.NoActionBar"))
         assertTrue(styles.contains("colorPrimaryContainer"))
         assertTrue(styles.contains("shapeAppearanceLargeComponent"))
-        assertTrue(gradle.contains("minSdk = 21"))
-        assertTrue(gradle.contains("com.google.android.material:material:1.13.0"))
+        assertTrue(gradle.contains("minSdk = 23"))
+        assertTrue(gradle.contains("com.google.android.material:material:1.14.0"))
     }
 
     @Test

@@ -21,7 +21,7 @@ class LegacyAirPlaySurfaceRecoverySourceTest {
         assertTrue(renderer.contains("recoveryHasIdr"))
         assertTrue(renderer.contains("MAX_RECOVERY_NALS"))
         assertTrue(renderer.contains("surface == null || !surface.isValid"))
-        assertTrue(renderer.contains("replayed $count buffered NAL units".replace("$count", "")))
+        assertTrue(renderer.contains("buffered NAL units after Surface became ready"))
     }
 
     @Test

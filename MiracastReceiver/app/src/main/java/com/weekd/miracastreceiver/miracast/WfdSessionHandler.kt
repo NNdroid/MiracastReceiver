@@ -27,9 +27,7 @@ class WfdSessionHandler(
     private var setupCseq = -1
     private var playCseq = -1
     private var streamStarted = false
-    private var secondPlaySent = false
     private var sourceIdentity = ""
-    private var androidLikeSource = false
 
     var onSessionEstablished: ((sessionId: String) -> Unit)? = null
     var onStreamStart: ((rtpPort: Int) -> Unit)? = null
@@ -38,15 +36,11 @@ class WfdSessionHandler(
     companion object {
         private const val MAX_RTSP_BODY_BYTES = 1024 * 1024
 
-        /**
-         * Broad R1 H.264 capability set used by known-good AOSP/Android sinks.
-         * CBP+CHP, level 4.2 and the common CEA/VESA/HH timings cover phones, Windows and TVs
-         * without requiring WFD R2 negotiation.
-         */
+        /** Broad WFD R1 H.264 set retained for existing Windows/Android interoperability. */
         private const val VIDEO_FORMATS =
             "00 00 03 10 0001FFFF 1FFFFFFF 00000FFF 00 0000 0000 00 none none"
 
-        /** LPCM is mandatory; AAC-LC is supported by our TS audio path as well. */
+        /** LPCM is mandatory; AAC-LC is also supported by our TS audio path. */
         private const val AUDIO_CODECS = "LPCM 00000003 00, AAC 0000000F 00"
     }
 
@@ -73,7 +67,6 @@ class WfdSessionHandler(
     private fun readMessage(): String? {
         val buf = StringBuilder()
         val one = ByteArray(1)
-
         while (!buf.endsWith("\r\n\r\n")) {
             val n = input.read(one)
             if (n <= 0) return null
@@ -100,7 +93,6 @@ class WfdSessionHandler(
             }
             buf.append(String(body, StandardCharsets.UTF_8))
         }
-
         val msg = buf.toString()
         Timber.d("WFD >> ${msg.lineSequence().first()}")
         Timber.v("WFD >> full:\n$msg")
@@ -117,7 +109,6 @@ class WfdSessionHandler(
     private fun handleRequest(msg: String) {
         val method = msg.substringBefore(' ').uppercase()
         val cseq = header(msg, "CSeq") ?: "0"
-
         when (method) {
             "OPTIONS" -> {
                 sendOk(cseq, "Public: org.wfa.wfd1.0, GET_PARAMETER, SET_PARAMETER\r\n")
@@ -126,17 +117,10 @@ class WfdSessionHandler(
                     sendOptions()
                 }
             }
-
             "GET_PARAMETER" -> {
                 val requested = requestedParameters(msg)
-                if (requested.isEmpty()) {
-                    // Empty GET_PARAMETER is the WFD keep-alive form.
-                    sendOk(cseq)
-                } else {
-                    sendCapabilities(cseq, requested)
-                }
+                if (requested.isEmpty()) sendOk(cseq) else sendCapabilities(cseq, requested)
             }
-
             "SET_PARAMETER" -> {
                 param(msg, "wfd_presentation_URL")
                     ?.substringBefore(' ')
@@ -145,14 +129,11 @@ class WfdSessionHandler(
                         presentationUrl = it
                         Timber.i("WFD: presentation URL = $it")
                     }
-
-                param(msg, "wfd_video_formats")?.let { selected ->
-                    Timber.i("WFD: source selected video format = $selected")
-                    logNegotiatedVideoMode(selected)
+                param(msg, "wfd_video_formats")?.let {
+                    Timber.i("WFD: source selected video format = $it")
+                    logNegotiatedVideoMode(it)
                 }
-                param(msg, "wfd_audio_codecs")?.let {
-                    Timber.i("WFD: source selected audio codec = $it")
-                }
+                param(msg, "wfd_audio_codecs")?.let { Timber.i("WFD: source selected audio codec = $it") }
 
                 sendOk(cseq)
                 when {
@@ -161,12 +142,10 @@ class WfdSessionHandler(
                     msg.contains("wfd_trigger_method: TEARDOWN", ignoreCase = true) -> close()
                 }
             }
-
             "TEARDOWN" -> {
                 sendOk(cseq)
                 close()
             }
-
             "PAUSE", "PLAY" -> sendOk(cseq)
             else -> sendOk(cseq)
         }
@@ -184,8 +163,6 @@ class WfdSessionHandler(
 
         when (cseq) {
             setupCseq -> {
-                // Some older/quirky sources omit Session in the SETUP response. Do not abort the
-                // entire WFD session; PLAY without Session is more interoperable for those devices.
                 sessionId = header(msg, "Session")?.substringBefore(';')?.trim().orEmpty()
                 val transport = header(msg, "Transport")
                 if (sessionId.isBlank()) {
@@ -196,30 +173,18 @@ class WfdSessionHandler(
                         "transport=${transport ?: "unknown"}"
                 )
                 onSessionEstablished?.invoke(sessionId.ifBlank { "legacy" })
+                setupCseq = -1
                 sendPlay()
             }
-
             playCseq -> {
+                playCseq = -1
                 if (!streamStarted) {
                     streamStarted = true
-                    Timber.i("WFD: PLAY acknowledged, RTP should start on $rtpPort")
+                    Timber.i("WFD: PLAY acknowledged; waiting for RTP on $rtpPort")
                     onStreamStart?.invoke(rtpPort)
                     startPlayerActivity()
-                } else {
-                    Timber.d("WFD: compatibility PLAY acknowledged")
-                }
-
-                if (androidLikeSource && !secondPlaySent) {
-                    // Several Android/MIUI/HyperOS sources behave like AOSP sinks/dongles that
-                    // expect a second PLAY transition before they begin pushing TS packets.
-                    secondPlaySent = true
-                    Timber.i("WFD: sending Android compatibility second PLAY")
-                    sendPlay()
-                } else {
-                    playCseq = -1
                 }
             }
-
             else -> Timber.d("WFD: RTSP response acknowledged cseq=$cseq")
         }
     }
@@ -243,14 +208,15 @@ class WfdSessionHandler(
         send(
             "SETUP $presentationUrl RTSP/1.0\r\n" +
                 "CSeq: $setupCseq\r\n" +
-                // AOSP WFD sink uses an RTP/RTCP pair here. Some Android sources reject a single
-                // client_port even though M3 correctly advertises port1 as 0.
                 "Transport: RTP/AVP/UDP;unicast;client_port=$rtpPort-$rtcpPort\r\n" +
                 "User-Agent: MiracastReceiver/1.0\r\n\r\n"
         )
     }
 
     private fun sendPlay() {
+        if (presentationUrl.isEmpty()) {
+            presentationUrl = "rtsp://${socket.inetAddress.hostAddress}/wfd1.0/streamid=0"
+        }
         playCseq = ++outCseq
         val sessionHeader = if (sessionId.isNotBlank()) "Session: $sessionId\r\n" else ""
         send(
@@ -261,7 +227,7 @@ class WfdSessionHandler(
         )
     }
 
-    private fun sendOk(cseq: String, extraHeaders: String = "") =
+    private fun sendOk(cseq: String, extraHeaders: String = "") {
         send(
             "RTSP/1.0 200 OK\r\n" +
                 "CSeq: $cseq\r\n" +
@@ -269,8 +235,8 @@ class WfdSessionHandler(
                 extraHeaders +
                 "\r\n"
         )
+    }
 
-    /** Reply only to parameters the Source actually asked for; unknown extensions may be ignored. */
     private fun sendCapabilities(cseq: String, requested: Set<String>) {
         val capabilities = capabilityValues()
         val lines = requested.mapNotNull { name -> capabilities[name.lowercase()]?.let { "$name: $it" } }
@@ -279,7 +245,6 @@ class WfdSessionHandler(
             sendOk(cseq)
             return
         }
-
         val bytes = body.toByteArray(StandardCharsets.UTF_8)
         send(
             "RTSP/1.0 200 OK\r\n" +
@@ -296,6 +261,7 @@ class WfdSessionHandler(
         "wfd_video_formats" to VIDEO_FORMATS,
         "wfd_audio_codecs" to AUDIO_CODECS,
         "wfd_3d_video_formats" to "none",
+        // WFD M3 uses port1=0 for the sink's RTP capability; SETUP later carries the RTP/RTCP pair.
         "wfd_client_rtp_ports" to "RTP/AVP/UDP;unicast $rtpPort 0 mode=play",
         "wfd_content_protection" to "none",
         "wfd_display_edid" to "none",
@@ -303,12 +269,8 @@ class WfdSessionHandler(
         "wfd_uibc_capability" to "none",
         "wfd_standby_resume_capability" to "none",
         "wfd_connector_type" to "05",
-        // We currently do not emit M13, so reporting 0 encourages Windows to insert IDRs more
-        // frequently and improves recovery from packet loss without lying about our capability.
         "wfd_idr_request_capability" to "0",
         "wfd_i2c" to "none",
-        // Common Intel/Microsoft source probes. Returning a conservative value is more compatible
-        // than treating the entire M3 as unsupported, while WFD2-only parameters remain omitted.
         "intel_friendly_name" to Build.MODEL.take(64),
         "intel_sink_manufacturer_name" to Build.MANUFACTURER.take(64),
         "intel_sink_model_name" to Build.MODEL.take(64),
@@ -325,8 +287,8 @@ class WfdSessionHandler(
         return body.lineSequence()
             .map { it.trim() }
             .filter { it.isNotBlank() && !it.contains(':') }
-            .filter { name ->
-                val lower = name.lowercase()
+            .filter {
+                val lower = it.lowercase()
                 lower.startsWith("wfd_") || lower.startsWith("intel_") || lower.startsWith("microsoft_")
             }
             .toCollection(linkedSetOf())
@@ -334,11 +296,10 @@ class WfdSessionHandler(
 
     private fun observeSourceIdentity(msg: String) {
         val candidates = listOfNotNull(header(msg, "Server"), header(msg, "User-Agent"))
-        if (candidates.isNotEmpty()) sourceIdentity = candidates.joinToString(" | ")
-        val text = (sourceIdentity + "\n" + msg.take(4096)).lowercase()
-        androidLikeSource = androidLikeSource || listOf(
-            "android", "stagefright", "xiaomi", "miui", "hyperos", "samsung", "pixel", "google"
-        ).any { it in text }
+        if (candidates.isNotEmpty()) {
+            sourceIdentity = candidates.joinToString(" | ")
+            Timber.d("WFD Source identity: $sourceIdentity")
+        }
     }
 
     private fun logNegotiatedVideoMode(selected: String) {

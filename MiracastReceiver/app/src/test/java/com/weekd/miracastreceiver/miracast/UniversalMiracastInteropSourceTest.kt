@@ -1,5 +1,6 @@
 package com.weekd.miracastreceiver.miracast
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -23,6 +24,7 @@ class UniversalMiracastInteropSourceTest {
         assertTrue(session.contains("intel_friendly_name"))
         assertTrue(session.contains("microsoft_rtcp_capability"))
         assertTrue(session.contains("wfd_3d_video_formats"))
+        assertTrue(session.contains("RTP/AVP/UDP;unicast \$rtpPort 0 mode=play"))
     }
 
     @Test
@@ -33,10 +35,12 @@ class UniversalMiracastInteropSourceTest {
     }
 
     @Test
-    fun androidSourcesCanReceiveSecondPlay() {
-        assertTrue(session.contains("androidLikeSource"))
-        assertTrue(session.contains("secondPlaySent"))
-        assertTrue(session.contains("sending Android compatibility second PLAY"))
+    fun standardRtspFlowUsesSinglePlayTransition() {
+        assertTrue(session.contains("setupCseq = -1"))
+        assertTrue(session.contains("sendPlay()"))
+        assertTrue(session.contains("playCseq = -1"))
+        assertFalse(session.contains("secondPlaySent"))
+        assertFalse(session.contains("compatibility second PLAY"))
     }
 
     @Test

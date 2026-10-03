@@ -25,8 +25,8 @@ android {
         applicationId = "com.weekd.miracastreceiver"
         minSdk = 23
         targetSdk = 36
-        versionCode = 44
-        versionName = "1.13.1"
+        versionCode = 45
+        versionName = "1.13.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "GOOGLE_CAST_APP_ID", "\"$escapedGoogleCastAppId\"")
         ndk { abiFilters += setOf("armeabi-v7a", "arm64-v8a") }
@@ -64,8 +64,6 @@ android {
 
     packaging {
         resources {
-            // Multi-release Java dependencies can publish the same OSGi metadata path.
-            // Android does not consume it at runtime, so keep only one copy.
             excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
         }
     }
@@ -113,7 +111,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
 
-    // 13.1.5 remains the latest published Shizuku API artifact.
     implementation("dev.rikka.shizuku:api:13.1.5")
     implementation("dev.rikka.shizuku:provider:13.1.5")
 

@@ -2,6 +2,7 @@ package com.weekd.miracastreceiver.miracast
 
 import android.os.SystemClock
 import android.view.Surface
+import com.weekd.miracastreceiver.web.RuntimeState
 import kotlinx.coroutines.*
 import timber.log.Timber
 import java.net.DatagramPacket
@@ -49,6 +50,7 @@ class RtpReceiver(
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     @Volatile private var isRunning = false
+    @Volatile private var lastPublishedPipelineState = ""
 
     private val renderer = MiracastVideoRenderer(surfaceProvider)
     private val audioPlayer = MiracastAudioPlayer()
@@ -124,6 +126,32 @@ class RtpReceiver(
         scope.launch { runReceiver() }
     }
 
+    private fun publishPipelineState(state: String) {
+        if (state == lastPublishedPipelineState) return
+        lastPublishedPipelineState = state
+        RuntimeState.miracastState = state
+        Timber.i("Miracast pipeline state: $state")
+    }
+
+    /**
+     * Publish what is actually happening after RTSP negotiation instead of claiming STREAMING as
+     * soon as PLAY succeeds. This state is consumed by TV/WebUI status and is intentionally based
+     * on live RTP/TS/Surface/decoder observations.
+     */
+    private fun refreshPipelineState() {
+        if (!isRunning) return
+        val video = renderer.snapshot()
+        val next = when {
+            packetsReceived == 0L -> "WAITING_RTP"
+            video.accessUnits == 0L -> "RTP_ACTIVE"
+            video.waitingForSurface -> "WAITING_SURFACE"
+            video.waitingForKeyframe -> "WAITING_IDR"
+            video.decoderReady -> "DISPLAYING"
+            else -> "VIDEO_ACTIVE"
+        }
+        publishPipelineState(next)
+    }
+
     private suspend fun runReceiver() = withContext(Dispatchers.IO) {
         try {
             socket = DatagramSocket(port).apply {
@@ -140,6 +168,7 @@ class RtpReceiver(
             }.getOrNull()
 
             isRunning = true
+            publishPipelineState("WAITING_RTP")
             Timber.i(
                 "RTP Receiver listening on UDP $port (MPEG-2 TS), RTCP=" +
                     "${if (rtcpSocket != null) port + 1 else "unavailable"}, recvBuf=${socket?.receiveBufferSize}"
@@ -197,7 +226,10 @@ class RtpReceiver(
                     packetsReceived++
                     bytesReceived += packet.length
                     lastPacketAtMs = now
-                    if (firstPacketAtMs == 0L) firstPacketAtMs = now
+                    if (firstPacketAtMs == 0L) {
+                        firstPacketAtMs = now
+                        publishPipelineState("RTP_ACTIVE")
+                    }
 
                     val range = rtpPayloadRange(packet.data, packet.length)
                     if (range == null) {
@@ -235,10 +267,7 @@ class RtpReceiver(
                             }
                             if (pending.size >= REORDER_WINDOW_PACKETS) skipConfirmedGap("reorder window full")
                         }
-                        else -> {
-                            // Sequence is behind expectedSeq: a late reordered packet or duplicate.
-                            packetsLateOrDuplicate++
-                        }
+                        else -> packetsLateOrDuplicate++
                     }
 
                     if (gapStartedAtMs != 0L && now - gapStartedAtMs >= REORDER_MAX_WAIT_MS) {
@@ -246,6 +275,7 @@ class RtpReceiver(
                     }
 
                     if (packetsReceived % 1000L == 0L) {
+                        refreshPipelineState()
                         Timber.i(
                             "RTP stats: packets=$packetsReceived bytes=${bytesReceived / 1024}KB lost=$packetsLost " +
                                 "reordered=$packetsReordered late=$packetsLateOrDuplicate invalid=$invalidPackets " +
@@ -257,12 +287,15 @@ class RtpReceiver(
                     if (gapStartedAtMs != 0L && now - gapStartedAtMs >= REORDER_MAX_WAIT_MS) {
                         skipConfirmedGap("reorder timeout")
                     }
+                    refreshPipelineState()
                 } catch (e: Exception) {
                     if (isRunning) Timber.e(e, "Error receiving RTP packet")
                 }
             }
         } catch (e: Exception) {
             Timber.e(e, "Failed to start RTP Receiver")
+            RuntimeState.lastError = "Miracast RTP: ${e.message.orEmpty()}"
+            publishPipelineState("RTP_ERROR")
             onError?.invoke("RTP 接收启动失败: ${e.message}")
             isRunning = false
         }
@@ -293,10 +326,12 @@ class RtpReceiver(
             val payload = withContext(Dispatchers.IO) { payloadQueue.poll(200, TimeUnit.MILLISECONDS) } ?: continue
             try {
                 demuxer.feed(payload, 0, payload.size)
+                refreshPipelineState()
             } catch (e: Exception) {
                 Timber.e(e, "Error demuxing TS payload")
                 renderer.onDiscontinuity()
                 audioPlayer.onDiscontinuity()
+                refreshPipelineState()
             }
         }
     }

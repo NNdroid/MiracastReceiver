@@ -38,10 +38,10 @@ object WfdRootHelper {
      * WFD Device Information subelement value (id 0 is supplied separately to WFD_SUBELEM_SET).
      * 0006 = six-byte payload length
      * 0011 = Primary Sink + Session Available
-     * 0000 = no RTSP server on the Sink (standard WFD Sink is the TCP client)
+     * 1c44 = RTSP control port 7236 (required by several Xiaomi/HyperOS discovery filters)
      * 0032 = 50 Mbps maximum throughput
      */
-    internal fun subelemHex(controlPort: Int = 0, maxThroughputMbps: Int = 50): String =
+    internal fun subelemHex(controlPort: Int = 7236, maxThroughputMbps: Int = 50): String =
         "0006" + "0011" + "%04x".format(controlPort.coerceIn(0, 0xffff)) +
             "%04x".format(maxThroughputMbps.coerceIn(0, 0xffff))
 
@@ -50,7 +50,6 @@ object WfdRootHelper {
         val hex = Regex("(?im)^wfd_subelems=([0-9a-f]+)\\s*$")
             .find(output)?.groupValues?.getOrNull(1)?.lowercase() ?: return null
 
-        // Peer output is a concatenation of WFD subelements: <id:1><len:2><payload:len>.
         var offset = 0
         while (offset + 6 <= hex.length) {
             val id = hex.substring(offset, offset + 2).toIntOrNull(16) ?: return null
@@ -59,7 +58,6 @@ object WfdRootHelper {
             val payloadEnd = payloadStart + lenBytes * 2
             if (payloadEnd > hex.length) return null
             if (id == 0 && lenBytes >= 6) {
-                // Device info (2 bytes), control port (2), maximum throughput (2).
                 val portHexStart = payloadStart + 4
                 val port = hex.substring(portHexStart, portHexStart + 4).toIntOrNull(16)
                 return port?.takeIf { it in 1..65535 }
@@ -92,7 +90,7 @@ object WfdRootHelper {
     }
 
     /** Advertise this device as an available primary Miracast sink. */
-    fun advertiseSink(context: Context, controlPort: Int = 0): Boolean {
+    fun advertiseSink(context: Context, controlPort: Int = 7236): Boolean {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             refreshAdvertisingAsync(context, controlPort)
             return true
@@ -135,7 +133,7 @@ object WfdRootHelper {
                 lastSuccessfulAdvertiseAt = SystemClock.elapsedRealtime()
                 Timber.i(
                     "WFD: primary sink advertised via $socketPath; " +
-                        "sinkRtsp=${if (controlPort == 0) "none" else controlPort} extended-listen=500/1000"
+                        "advertisedRtsp=$controlPort extended-listen=500/1000"
                 )
                 true
             } else {
@@ -147,7 +145,7 @@ object WfdRootHelper {
         }
     }
 
-    fun refreshAdvertisingAsync(context: Context, controlPort: Int = 0) {
+    fun refreshAdvertisingAsync(context: Context, controlPort: Int = 7236) {
         val appContext = context.applicationContext
         Thread({
             runCatching { advertiseSink(appContext, controlPort) }

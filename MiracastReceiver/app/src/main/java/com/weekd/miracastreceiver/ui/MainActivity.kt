@@ -27,7 +27,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private enum class Destination {
-        HOME, PLAYER, SETTINGS, ABOUT
+        HOME, SETTINGS, ABOUT
     }
 
     private val backPressExitGate = BackPressExitGate()
@@ -107,7 +107,6 @@ class MainActivity : AppCompatActivity() {
         val visible = supportFragmentManager.fragments.firstOrNull { it.isAdded && !it.isHidden }
         return when (visible) {
             is SettingsFragment -> Destination.SETTINGS
-            is PlayerHubFragment -> Destination.PLAYER
             is AboutFragment -> Destination.ABOUT
             else -> Destination.HOME
         }
@@ -120,7 +119,6 @@ class MainActivity : AppCompatActivity() {
             ?: manager.fragments.firstOrNull { fragment ->
                 when (destination) {
                     Destination.HOME -> fragment is HomeFragment
-                    Destination.PLAYER -> fragment is PlayerHubFragment
                     Destination.SETTINGS -> fragment is SettingsFragment
                     Destination.ABOUT -> fragment is AboutFragment
                 }
@@ -145,7 +143,6 @@ class MainActivity : AppCompatActivity() {
     private fun setupNavigation() {
         navItems = listOf(
             Destination.HOME to findViewById(R.id.nav_home),
-            Destination.PLAYER to findViewById(R.id.nav_player),
             Destination.SETTINGS to findViewById(R.id.nav_settings),
             Destination.ABOUT to findViewById(R.id.nav_about)
         )
@@ -165,7 +162,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun fragmentFor(destination: Destination): Fragment = when (destination) {
         Destination.HOME -> HomeFragment()
-        Destination.PLAYER -> PlayerHubFragment()
         Destination.SETTINGS -> SettingsFragment()
         Destination.ABOUT -> AboutFragment()
     }

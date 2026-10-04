@@ -36,6 +36,7 @@ import com.weekd.miracastreceiver.miracast.WifiDirectManager
 import com.weekd.miracastreceiver.ui.PlayerActivity
 import com.weekd.miracastreceiver.util.AppSettings
 import com.weekd.miracastreceiver.utils.NetworkUtils
+import com.weekd.miracastreceiver.webrtc.WebRtcReceiver
 import com.weekd.miracastreceiver.web.RuntimeState
 import com.weekd.miracastreceiver.web.WebUiServer
 import timber.log.Timber
@@ -69,6 +70,7 @@ class CastReceiverService : Service() {
     private lateinit var deviceUuid: String
     private lateinit var connectionCode: String
     private var airPlayPlayerStarted = false
+    private var webrtcPlayerStarted = false
 
     private var initialized = false
     private var servicesStarted = false
@@ -246,7 +248,62 @@ class CastReceiverService : Service() {
         )
 
         initWfdServer(deviceName)
+        initWebRtcReceiver(deviceName)
         initDlnaServices(deviceInfoProvider, settings.upnpPort)
+    }
+
+    private fun initWebRtcReceiver(deviceName: String) {
+        WebRtcReceiver.apply {
+            onSignalingStarted = { port ->
+                RuntimeState.webrtcSignalingPort = port
+                Timber.i("WebRTC signaling ready on port $port")
+            }
+            onSessionRequested = { client ->
+                RuntimeState.webrtcState = "CONNECTING"
+                RuntimeState.webrtcClient = client
+                Timber.i("WebRTC session requested: $client")
+            }
+            onSessionEstablished = { sessionId ->
+                RuntimeState.webrtcState = "CONNECTED"
+                Timber.i("WebRTC session established: $sessionId")
+            }
+            onStreamStarted = {
+                RuntimeState.webrtcState = "STREAMING"
+                RuntimeState.updatePlayback {
+                    it.copy(
+                        state = "MIRRORING",
+                        source = "WebRTC",
+                        title = "WebRTC 屏幕镜像",
+                        positionMs = 0L,
+                        durationMs = 0L,
+                        isLive = true,
+                        isSeekable = false,
+                        decoderName = "",
+                        hardwareDecoder = false
+                    )
+                }
+                setPlaybackSourceActive("webrtc", true)
+                if (!webrtcPlayerStarted && AppSettings.isAutoLaunchPlayer(this@CastReceiverService)) {
+                    webrtcPlayerStarted = true
+                    startActivity(Intent(this@CastReceiverService, PlayerActivity::class.java).apply {
+                        putExtra(PlayerActivity.EXTRA_IS_WEBRTC_MIRROR, true)
+                        putExtra(PlayerActivity.EXTRA_MEDIA_TITLE, "WebRTC 屏幕镜像")
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    })
+                }
+            }
+            onStreamStopped = {
+                RuntimeState.webrtcState = "IDLE"
+                RuntimeState.webrtcClient = ""
+                setPlaybackSourceActive("webrtc", false)
+                if (RuntimeState.playbackSource == "WebRTC" && activePlaybackSources.isEmpty()) {
+                    RuntimeState.resetPlayback()
+                }
+                Timber.i("WebRTC stream stopped, closing player")
+                sendPlayerBroadcast(PlayerActivity.ACTION_STOP)
+                webrtcPlayerStarted = false
+            }
+        }
     }
 
     private fun getBestDisplayResolution(maxHeightSetting: Int): Pair<Int, Int> {
@@ -524,6 +581,17 @@ class CastReceiverService : Service() {
                 .onFailure { failures += "WFD RTSP: ${it.message}"; Timber.e(it, "WFD server start failed") }
         }
 
+        if (settings.webrtcEnabled) {
+            runCatching {
+                WebRtcReceiver.start(
+                    this,
+                    DeviceInfoProvider(this).getDeviceName(),
+                    { RuntimeState.webrtcState },
+                    settings.webrtcPort
+                )
+            }.onFailure { failures += "WebRTC: ${it.message}"; Timber.e(it, "WebRTC receiver start failed") }
+        }
+
         if (settings.webUiEnabled) {
             runCatching {
                 webUiServer = WebUiServer(
@@ -539,7 +607,7 @@ class CastReceiverService : Service() {
         RuntimeState.lastError = failures.joinToString("; ")
         Timber.i(
             "Receiver services started: AirPlay=${settings.airPlayEnabled}, DLNA=${settings.dlnaEnabled}, " +
-                "Miracast=${settings.miracastEnabled}, WebUI=${settings.webUiEnabled}"
+                "Miracast=${settings.miracastEnabled}, WebRTC=${settings.webrtcEnabled}, WebUI=${settings.webUiEnabled}"
         )
     }
 
@@ -567,14 +635,19 @@ class CastReceiverService : Service() {
             runCatching { airPlayReceiver.stop() }
             runCatching { ssdpServer.stop() }
             runCatching { upnpHttpServer.stop() }
+            runCatching { WebRtcReceiver.stop() }
             shutdownMiracast()
         }
         airPlayPlayerStarted = false
+        webrtcPlayerStarted = false
         RuntimeState.airPlayState = "IDLE"
         RuntimeState.airPlaySender = ""
         RuntimeState.miracastState = "IDLE"
         RuntimeState.miracastClient = ""
         RuntimeState.miracastRtpPort = 0
+        RuntimeState.webrtcState = "IDLE"
+        RuntimeState.webrtcClient = ""
+        RuntimeState.webrtcSignalingPort = 0
         activePlaybackSources.clear()
         updateForegroundType()
     }
@@ -619,6 +692,7 @@ class CastReceiverService : Service() {
             playerReceiverRegistered = false
         }
         runCatching { connectivityManager.unregisterNetworkCallback(networkCallback) }
+        runCatching { WebRtcReceiver.release() }
 
         RuntimeState.serviceRunning = false
         RuntimeState.serviceStartedAtMs = 0L

@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MiracastReceiver WebRTC 发送端（测试）</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; font-family:system-ui,-apple-system,"Segoe UI",sans-serif; background:#101418; color:#e8edf2; }
+  .wrap { max-width:860px; margin:0 auto; padding:24px 16px 64px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  p.sub { color:#93a3b3; margin:0 0 20px; font-size:14px; }
+  .panel { background:#1a2129; border:1px solid #2a3441; border-radius:12px; padding:18px; margin-bottom:16px; }
+  label { display:block; font-size:13px; color:#9fb0c0; margin:10px 0 4px; }
+  input[type=text], select { width:100%; box-sizing:border-box; padding:9px 10px; border-radius:8px; border:1px solid #34404e; background:#11161c; color:#e8edf2; font-size:14px; }
+  button { padding:10px 18px; border-radius:8px; border:0; background:#2f6fed; color:#fff; font-size:14px; cursor:pointer; margin:12px 8px 0 0; }
+  button.secondary { background:#31404f; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  video { width:100%; border-radius:10px; background:#000; margin-top:8px; max-height:300px; }
+  #status { font-size:14px; }
+  .ok { color:#5bd08a; } .bad { color:#ff7b72; } .warn { color:#e3b341; }
+  pre { background:#11161c; border:1px solid #2a3441; border-radius:8px; padding:10px; font-size:12px; overflow:auto; max-height:180px; }
+  .hint { font-size:12.5px; color:#8fa0b0; line-height:1.6; }
+  code { background:#11161c; border:1px solid #2a3441; border-radius:4px; padding:1px 5px; font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>WebRTC 投屏发送端（测试页）</h1>
+  <p class="sub">本页面由 MiracastReceiver 的信令服务器直接提供（阶段 1），通过 WebSocket 交换 SDP Offer/Answer 与 ICE Candidate（阶段 2 接收端为 Android TV 侧）。</p>
+
+  <div id="insecure" class="panel" style="display:none">
+    <strong class="warn">⚠ 非 HTTPS 环境</strong>
+    <p class="hint">浏览器仅在「安全上下文」里开放 <code>getDisplayMedia</code>/<code>getUserMedia</code>。可选任一方式：</p>
+    <p class="hint">1. 把本页保存为本地文件后用 <code>file://</code> 打开（file:// 属于安全上下文），地址填电视 IP；<br>
+       2. Chrome 地址栏打开 <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>，加入 <code>http://&lt;电视IP&gt;:18095</code> 后重启浏览器；<br>
+       3. 使用任意自定义 WebRTC 客户端按下方协议直连 WebSocket 信令。</p>
+  </div>
+
+  <div class="panel">
+    <label for="wsUrl">信令地址</label>
+    <input id="wsUrl" type="text" placeholder="ws://192.168.x.x:18095/signaling">
+    <label for="mediaKind">发送内容</label>
+    <select id="mediaKind">
+      <option value="screen">屏幕/窗口（getDisplayMedia，可勾选共享声音）</option>
+      <option value="camera">摄像头 + 麦克风（getUserMedia）</option>
+    </select>
+    <div>
+      <button id="btnStart">连接并开始投屏</button>
+      <button id="btnStop" class="secondary" disabled>停止</button>
+    </div>
+    <video id="preview" autoplay muted playsinline></video>
+    <p id="status">未连接</p>
+    <pre id="log"></pre>
+    <p class="hint">
+      信令协议：<code>{"type":"offer","sdp":...}</code> / <code>{"type":"candidate","sdpMid":..,"sdpMLineIndex":..,"candidate":..}</code> →
+      接收端回 <code>{"type":"answer","sdp":...}</code>、<code>{"type":"state","state":"streaming"}</code>、<code>{"type":"welcome"|"pong"|"error"}</code>。
+      断开时发送 <code>{"type":"bye"}</code>。
+    </p>
+  </div>
+</div>
+
+<script>
+(function () {
+  var wsUrlInput = document.getElementById('wsUrl');
+  var statusEl = document.getElementById('status');
+  var logEl = document.getElementById('log');
+  var btnStart = document.getElementById('btnStart');
+  var btnStop = document.getElementById('btnStop');
+  var preview = document.getElementById('preview');
+  var ws = null, pc = null, localStream = null;
+
+  var insecure = !(window.isSecureContext);
+  document.getElementById('insecure').style.display = insecure ? '' : 'none';
+
+  // 信令服务器与页面同源提供时默认使用其地址；本地 file:// 打开时需要手填电视 IP。
+  if (location.protocol === 'http:' || location.protocol === 'https:') {
+    wsUrlInput.value = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/signaling';
+  }
+
+  function log(line) {
+    logEl.textContent = ('[' + new Date().toLocaleTimeString() + '] ' + line + '\n' + logEl.textContent).split('\n').slice(0, 60).join('\n');
+  }
+  function setStatus(text, cls) {
+    statusEl.textContent = text;
+    statusEl.className = cls || '';
+  }
+
+  function connectSignaling() {
+    return new Promise(function (resolve, reject) {
+      var url = wsUrlInput.value.trim();
+      if (!url) { reject(new Error('请填写信令地址')); return; }
+      var socket = new WebSocket(url);
+      socket.onopen = function () {
+        log('信令已连接: ' + url);
+        resolve(socket);
+      };
+      socket.onerror = function () { reject(new Error('信令连接失败（检查 IP/端口与防火墙）')); };
+      socket.onclose = function () {
+        if (ws === socket) { cleanup('信令断开'); }
+      };
+      socket.onmessage = function (event) {
+        var msg;
+        try { msg = JSON.parse(event.data); } catch (e) { return; }
+        handleSignal(msg);
+      };
+    });
+  }
+
+  function send(obj) {
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+  }
+
+  async function handleSignal(msg) {
+    if (!pc) return;
+    if (msg.type === 'answer') {
+      log('收到 answer，长度 ' + (msg.sdp || '').length);
+      await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+      setStatus('已建立连接，等待媒体……', 'ok');
+    } else if (msg.type === 'candidate' && msg.candidate) {
+      try {
+        await pc.addIceCandidate({ sdpMid: msg.sdpMid, sdpMLineIndex: msg.sdpMLineIndex, candidate: msg.candidate });
+      } catch (e) { log('addIceCandidate: ' + e.message); }
+    } else if (msg.type === 'welcome') {
+      log('接收端: ' + (msg.name || 'Android TV'));
+    } else if (msg.type === 'state') {
+      log('接收端状态: ' + msg.state);
+      if (msg.state === 'streaming') setStatus('电视端正在播放 🎉', 'ok');
+    } else if (msg.type === 'error') {
+      log('接收端错误: ' + msg.message);
+    } else if (msg.type === 'pong') {
+      /* ignore */
+    }
+  }
+
+  async function start() {
+    btnStart.disabled = true;
+    try {
+      ws = await connectSignaling();
+      localStream = await acquireMedia();
+      preview.srcObject = localStream;
+
+      pc = new RTCPeerConnection({ iceServers: [] }); // 局域网直连，host candidate 足够
+      localStream.getTracks().forEach(function (track) { pc.addTrack(track, localStream); });
+      pc.onicecandidate = function (event) {
+        if (event.candidate) {
+          send({ type: 'candidate', sdpMid: event.candidate.sdpMid, sdpMLineIndex: event.candidate.sdpMLineIndex, candidate: event.candidate.candidate });
+        }
+      };
+      pc.onconnectionstatechange = function () {
+        log('PeerConnection: ' + pc.connectionState);
+        if (pc.connectionState === 'connected') setStatus('WebRTC 已连接', 'ok');
+        if (pc.connectionState === 'failed' || pc.connectionState === 'closed') setStatus('连接' + pc.connectionState, 'bad');
+      };
+
+      var offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      log('已生成 offer（' + offer.sdp.length + ' 字节），等待 answer…');
+      send({ type: 'offer', sdp: pc.localDescription.sdp });
+      setStatus('offer 已发送，等待电视端 answer…', 'warn');
+      btnStop.disabled = false;
+      pollStats();
+    } catch (e) {
+      setStatus('失败：' + e.message, 'bad');
+      log('错误: ' + e.message);
+      cleanup(null);
+    }
+  }
+
+  async function acquireMedia() {
+    var kind = document.getElementById('mediaKind').value;
+    if (kind === 'screen') {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+        throw new Error('当前环境不支持 getDisplayMedia（见页面顶部说明）');
+      }
+      var stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 30 }, audio: true });
+      if (!stream.getAudioTracks().length) log('发送端未共享声音，将只有画面');
+      return stream;
+    }
+    return navigator.mediaDevices.getUserMedia({ video: { width: 1280 }, audio: true });
+  }
+
+  var statsTimer = null;
+  function pollStats() {
+    clearInterval(statsTimer);
+    statsTimer = setInterval(async function () {
+      if (!pc) { clearInterval(statsTimer); return; }
+      var report = await pc.getStats();
+      var bytes = 0, fps = 0, w = 0, h = 0;
+      report.forEach(function (s) {
+        if (s.type === 'inbound-rtp' && s.kind === 'video') {
+          bytes = s.bytesReceived || bytes; fps = s.framesPerSecond || fps; w = s.frameWidth || w; h = s.frameHeight || h;
+        }
+      });
+      if (w) setStatus('推流中 ' + w + '×' + h + ' · ' + (fps ? fps.toFixed(0) + 'fps' : '…'), 'ok');
+    }, 2000);
+  }
+
+  function cleanup(reason) {
+    clearInterval(statsTimer);
+    if (pc) { try { pc.close(); } catch (e) {} pc = null; }
+    if (localStream) { localStream.getTracks().forEach(function (t) { t.stop(); }); localStream = null; }
+    preview.srcObject = null;
+    if (ws) {
+      if (ws.readyState === 1 && reason) { try { ws.send(JSON.stringify({ type: 'bye' })); } catch (e) {} }
+      try { ws.close(); } catch (e) {}
+      ws = null;
+    }
+    btnStart.disabled = false;
+    btnStop.disabled = true;
+    if (reason) setStatus(reason, 'warn');
+  }
+
+  btnStart.addEventListener('click', start);
+  btnStop.addEventListener('click', function () { cleanup('已停止'); });
+  window.addEventListener('beforeunload', function () { if (ws) cleanup(null); });
+})();
+</script>
+</body>
+</html>

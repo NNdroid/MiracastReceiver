@@ -39,6 +39,8 @@ import androidx.media3.ui.PlayerView
 import com.weekd.miracastreceiver.R
 import com.weekd.miracastreceiver.airplay.StreamStats
 import com.weekd.miracastreceiver.miracast.RtpReceiver
+import com.weekd.miracastreceiver.webrtc.WebRtcReceiver
+import org.webrtc.SurfaceViewRenderer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -58,6 +60,7 @@ class PlayerActivity : AppCompatActivity() {
         const val EXTRA_MEDIA_TITLES = "media_titles"
         const val EXTRA_START_INDEX = "start_index"
         const val EXTRA_IS_AIRPLAY_MIRROR = "is_airplay_mirror"
+        const val EXTRA_IS_WEBRTC_MIRROR = "is_webrtc_mirror"
 
         const val EXTRA_SOURCE_TYPE = "SOURCE_TYPE"
         const val EXTRA_RTP_PORT = "RTP_PORT"
@@ -115,6 +118,10 @@ class PlayerActivity : AppCompatActivity() {
     private var qualityHeight: Int = QUALITY_AUTO
     private var isMiracastSession = false
     private var isAirPlayMirrorSession = false
+    private var isWebRtcSession = false
+    private var webrtcRendererInitialized = false
+    private var webrtcSurfaceView: SurfaceViewRenderer? = null
+    private var webrtcMetaJob: Job? = null
     private var mirrorAspectJob: Job? = null
     private var currentSpeed = 1f
     private var mediaLoadStartedAtMs = 0L
@@ -200,6 +207,7 @@ class PlayerActivity : AppCompatActivity() {
     private fun initViews() {
         playerView = findViewById(R.id.player_view)
         mirrorSurfaceView = findViewById(R.id.airplay_mirror_surface)
+        webrtcSurfaceView = findViewById(R.id.webrtc_surface)
         imageView = findViewById(R.id.image_view)
         tvStatus = findViewById(R.id.tv_status)
         tvTitle = findViewById(R.id.tv_title)
@@ -469,6 +477,10 @@ class PlayerActivity : AppCompatActivity() {
             startMiracastPlayback(intent.getIntExtra(EXTRA_RTP_PORT, 0), intent.getStringExtra(EXTRA_SESSION_ID))
             return
         }
+        if (intent?.getBooleanExtra(EXTRA_IS_WEBRTC_MIRROR, false) == true) {
+            startWebRtcPlayback()
+            return
+        }
         if (intent?.getBooleanExtra(EXTRA_IS_AIRPLAY_MIRROR, false) == true) {
             startAirPlayMirrorPlayback()
             return
@@ -616,6 +628,58 @@ class PlayerActivity : AppCompatActivity() {
         updateBufferingState(false)
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
         publishMirrorSurface()
+    }
+
+    private fun startWebRtcPlayback() {
+        Timber.i("Starting WebRTC mirror playback")
+        isWebRtcSession = true
+        isMiracastSession = false
+        isAirPlayMirrorSession = false
+        streamInfoTracker.reset()
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        stopImageSlideShow()
+        player?.clearVideoSurface()
+        player?.pause()
+        playerView.player = null
+        playerView.visibility = View.GONE
+        mirrorSurfaceView.visibility = View.GONE
+        imageView.visibility = View.GONE
+        tvTitle.text = "WebRTC 屏幕镜像"
+        tvStatus.text = "等待 WebRTC 画面..."
+        tvPlaybackMeta.text = "WebRTC"
+        tvError.visibility = View.GONE
+        updateBufferingState(false)
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+
+        val renderer = webrtcSurfaceView ?: return
+        if (!webrtcRendererInitialized) {
+            try {
+                renderer.init(WebRtcReceiver.eglBaseContext, null)
+                webrtcRendererInitialized = true
+            } catch (e: Exception) {
+                Timber.e(e, "WebRTC renderer init failed")
+                tvStatus.text = "WebRTC 渲染初始化失败"
+                return
+            }
+        }
+        renderer.visibility = View.VISIBLE
+        WebRtcReceiver.attachRenderer(renderer)
+        webrtcMetaJob?.cancel()
+        webrtcMetaJob = lifecycleScope.launch {
+            while (isActive && isWebRtcSession) {
+                delay(1000)
+                updateCompactPlaybackMeta()
+            }
+        }
+    }
+
+    private fun stopWebRtcPlayback() {
+        if (!isWebRtcSession) return
+        isWebRtcSession = false
+        webrtcMetaJob?.cancel()
+        webrtcMetaJob = null
+        WebRtcReceiver.detachRenderer()
+        webrtcSurfaceView?.visibility = View.GONE
     }
 
     private fun playMedia(uri: String) {
@@ -768,6 +832,16 @@ class PlayerActivity : AppCompatActivity() {
                 parts += "H.264"
                 tvPlaybackMeta.text = parts.joinToString("  •  ")
             }
+            isWebRtcSession -> {
+                val parts = mutableListOf("WebRTC")
+                if (WebRtcReceiver.statsWidth > 0 && WebRtcReceiver.statsHeight > 0) {
+                    parts += "${WebRtcReceiver.statsWidth}×${WebRtcReceiver.statsHeight}"
+                }
+                if (WebRtcReceiver.statsFrameCount > 0) {
+                    parts += "${WebRtcReceiver.statsFrameCount} 帧"
+                }
+                tvPlaybackMeta.text = parts.joinToString("  •  ")
+            }
             isCurrentImage() -> Unit
             else -> {
                 val currentPlayer = player
@@ -824,6 +898,7 @@ class PlayerActivity : AppCompatActivity() {
     private fun buildStreamInfoText(): String = when {
         isAirPlayMirrorSession -> buildAirPlayStreamInfo()
         isMiracastSession -> buildMiracastStreamInfo()
+        isWebRtcSession -> buildWebRtcStreamInfo()
         else -> buildExoPlayerStreamInfo()
     }
 
@@ -900,6 +975,18 @@ class PlayerActivity : AppCompatActivity() {
         )
     }
 
+    private fun buildWebRtcStreamInfo(): String {
+        val sample = streamInfoTracker.sample(0L, WebRtcReceiver.statsFrameCount)
+        return streamInfoLines(
+            resolution = StreamInfoTracker.formatResolution(WebRtcReceiver.statsWidth, WebRtcReceiver.statsHeight),
+            codec = "VP8 / H.264 (WebRTC)",
+            fps = StreamInfoTracker.formatFps(sample.fps.toFloat()),
+            bitrate = StreamInfoTracker.formatBitrate(sample.bitrateBps),
+            speed = StreamInfoTracker.formatSpeed(sample.bytesPerSec),
+            extraRows = listOf("来源" to "WebRTC")
+        )
+    }
+
     private fun streamInfoLines(
         resolution: String,
         codec: String,
@@ -924,7 +1011,11 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun currentDisplaySize(): Pair<Int, Int> {
-        val renderView = if (isAirPlayMirrorSession || isMiracastSession) mirrorSurfaceView else playerView.videoSurfaceView
+        val renderView = when {
+            isWebRtcSession -> webrtcSurfaceView
+            isAirPlayMirrorSession || isMiracastSession -> mirrorSurfaceView
+            else -> playerView.videoSurfaceView
+        }
         val width = renderView?.width ?: 0
         val height = renderView?.height ?: 0
         if (width > 0 && height > 0) return width to height
@@ -1027,6 +1118,7 @@ class PlayerActivity : AppCompatActivity() {
     private fun stopPlayback() {
         stopImageSlideShow()
         stopProgressUpdates()
+        stopWebRtcPlayback()
         mirrorAspectJob?.cancel()
         mirrorAspectJob = null
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -1080,12 +1172,22 @@ class PlayerActivity : AppCompatActivity() {
             Timber.e(e, "Error unregistering receiver")
         }
         stopImageSlideShow()
+        stopWebRtcPlayback()
+        webrtcMetaJob?.cancel()
+        webrtcMetaJob = null
         mirrorAspectJob?.cancel()
         mirrorAspectJob = null
         streamInfoJob?.cancel()
         streamInfoJob = null
         window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         mirrorSurface = null
+        webrtcSurfaceView?.let { renderer ->
+            if (webrtcRendererInitialized) {
+                runCatching { renderer.release() }
+                webrtcRendererInitialized = false
+            }
+        }
+        webrtcSurfaceView = null
         player?.release()
         player = null
         trackSelector = null

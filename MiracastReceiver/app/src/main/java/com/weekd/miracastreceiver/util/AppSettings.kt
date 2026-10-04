@@ -26,6 +26,8 @@ object AppSettings {
     private const val KEY_UPNP_PORT = "upnp_port"
     private const val KEY_WEB_UI_ENABLED = "web_ui_enabled"
     private const val KEY_WEB_UI_PORT = "web_ui_port"
+    private const val KEY_WEBRTC_ENABLED = "webrtc_enabled"
+    private const val KEY_WEBRTC_PORT = "webrtc_port"
     private const val KEY_WEB_UI_LAST_BOUND_PORT = "web_ui_last_bound_port"
     private const val KEY_WEB_UI_AUTH_REQUIRED = "web_ui_auth_required"
     private const val KEY_WEB_UI_AUTH_MODE = "web_ui_auth_mode"
@@ -40,6 +42,7 @@ object AppSettings {
 
     const val DEFAULT_UPNP_PORT = 8080
     const val DEFAULT_WEB_UI_PORT = 18090
+    const val DEFAULT_WEBRTC_PORT = 18095
     const val DEFAULT_MIRROR_MAX_HEIGHT = 0 // 0 = auto / display maximum
 
     fun isAutoStartOnBoot(context: Context): Boolean =
@@ -70,6 +73,12 @@ object AppSettings {
 
     fun getUpnpPort(context: Context): Int = sanitizePort(prefs(context).getInt(KEY_UPNP_PORT, DEFAULT_UPNP_PORT), DEFAULT_UPNP_PORT)
     fun setUpnpPort(context: Context, port: Int) { prefs(context).edit().putInt(KEY_UPNP_PORT, sanitizePort(port, DEFAULT_UPNP_PORT)).apply() }
+
+    fun isWebRtcEnabled(context: Context): Boolean = prefs(context).getBoolean(KEY_WEBRTC_ENABLED, true)
+    fun setWebRtcEnabled(context: Context, enabled: Boolean) { prefs(context).edit().putBoolean(KEY_WEBRTC_ENABLED, enabled).apply() }
+
+    fun getWebRtcPort(context: Context): Int = sanitizePort(prefs(context).getInt(KEY_WEBRTC_PORT, DEFAULT_WEBRTC_PORT), DEFAULT_WEBRTC_PORT)
+    fun setWebRtcPort(context: Context, port: Int) { prefs(context).edit().putInt(KEY_WEBRTC_PORT, sanitizePort(port, DEFAULT_WEBRTC_PORT)).apply() }
 
     fun isWebUiEnabled(context: Context): Boolean = prefs(context).getBoolean(KEY_WEB_UI_ENABLED, true)
     fun setWebUiEnabled(context: Context, enabled: Boolean) { prefs(context).edit().putBoolean(KEY_WEB_UI_ENABLED, enabled).apply() }
@@ -199,6 +208,8 @@ object AppSettings {
         val autoLaunchPlayer: Boolean,
         val mirrorMaxHeight: Int,
         val upnpPort: Int,
+        val webrtcEnabled: Boolean,
+        val webrtcPort: Int,
         val webUiEnabled: Boolean,
         val webUiPort: Int,
         val webUiLastBoundPort: Int?,
@@ -213,6 +224,7 @@ object AppSettings {
         miracastEnabled = isMiracastEnabled(context), customMdnsEnabled = isCustomMdnsEnabled(context),
         airPlayAudioEnabled = isAirPlayAudioEnabled(context), autoLaunchPlayer = isAutoLaunchPlayer(context),
         mirrorMaxHeight = getMirrorMaxHeight(context), upnpPort = getUpnpPort(context),
+        webrtcEnabled = isWebRtcEnabled(context), webrtcPort = getWebRtcPort(context),
         webUiEnabled = isWebUiEnabled(context), webUiPort = getWebUiPort(context),
         webUiLastBoundPort = getWebUiLastBoundPort(context), webUiAuthRequired = isWebUiAuthRequired(context),
         webUiAuthMode = getWebUiAuthMode(context), autoStartOnBoot = isAutoStartOnBoot(context),

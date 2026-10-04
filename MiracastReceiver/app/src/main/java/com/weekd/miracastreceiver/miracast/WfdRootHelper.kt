@@ -34,11 +34,18 @@ object WfdRootHelper {
         "/data/misc/wifi/sockets/p2p0"
     )
 
+    /** Well-known supplicant control directories, scanned for sockets with other interface names. */
+    private val CTRL_SOCKET_DIRS = listOf(
+        "/data/vendor/wifi/wpa/sockets",
+        "/data/misc/wifi/sockets"
+    )
+
     data class AdvertisementStatus(
         val success: Boolean,
         val socketPath: String? = null,
         val coreWfdConfigured: Boolean = false,
         val extendedListenConfigured: Boolean = false,
+        val verified: Boolean = false,
         val detail: String = "not attempted"
     )
 
@@ -150,6 +157,16 @@ object WfdRootHelper {
                     continue
                 }
 
+                // Read-back verification: wfdctl treats "sent, no reply" as sent, so a filtered or
+                // SELinux-blocked command would otherwise look successful while the sink stays
+                // invisible to Miracast sources. A real reply with wrong content fails this socket.
+                val verification = verifyAdvertisement(binary.absolutePath, socketPath, payload)
+                if (verification.replied && !verification.ok) {
+                    lastDetail = "verification failed on $socketPath (${verification.detail})"
+                    Timber.w("WFD: $socketPath accepted the command but read-back disagrees; trying next")
+                    continue
+                }
+
                 val discoverabilityOk = runAsRoot(
                     "${binary.absolutePath} $socketPath \"P2P_SET discoverability 1\""
                 )
@@ -163,6 +180,7 @@ object WfdRootHelper {
                     socketPath = socketPath,
                     coreWfdConfigured = true,
                     extendedListenConfigured = listenOk,
+                    verified = verification.ok,
                     detail = buildString {
                         append("Primary Sink + Session Available + RTSP ")
                         append(controlPort)
@@ -170,11 +188,14 @@ object WfdRootHelper {
                         append(discoverabilityOk)
                         append("; extendedListen=")
                         append(listenOk)
+                        append("; verified=")
+                        append(verification.ok)
+                        if (!verification.replied) append(" (supplicant reply blocked; assume accepted)")
                     }
                 )
                 Timber.i(
                     "WFD: primary sink advertised via $socketPath; advertisedRtsp=$controlPort " +
-                        "discoverability=$discoverabilityOk extended-listen=$listenOk"
+                        "discoverability=$discoverabilityOk extended-listen=$listenOk verified=${verification.ok}"
                 )
                 return true
             }
@@ -224,8 +245,76 @@ object WfdRootHelper {
 
     fun isRootAvailable(): Boolean = runAsRoot("id")
 
-    private fun existingControlSockets(): List<String> = CTRL_SOCKET_PATHS.filter { path ->
-        runAsRoot("test -S '$path' || test -e '$path'")
+    private class Verification(val replied: Boolean, val ok: Boolean, val detail: String)
+
+    /**
+     * Read the state back with WFD_SUBELEM_GET 0. Reply semantics:
+     * - hex containing the injected payload -> verified
+     * - hex with different content          -> the SET did not stick; socket rejected
+     * - FAIL / UNKNOWN / empty              -> vendor supplicant without WFD_SUBELEM_GET or a
+     *   blocked reply path; treated as unverified (same as the historic no-reply behavior) instead
+     *   of failing a working injection.
+     */
+    private fun verifyAdvertisement(binaryPath: String, socketPath: String, payload: String): Verification {
+        val output = runAsRootOutput("$binaryPath $socketPath \"WFD_SUBELEM_GET 0\"")
+        if (output.isNullOrBlank()) return Verification(replied = false, ok = true, detail = "no-reply")
+        val reply = output.lineSequence()
+            .firstOrNull { it.contains("WFD_SUBELEM_GET") && it.contains("->") }
+            ?.substringAfter("->")?.trim().orEmpty()
+        val normalized = reply.lowercase().removePrefix("0x")
+        return when {
+            normalized.contains(payload) -> Verification(replied = true, ok = true, detail = "read-back ok")
+            normalized.length >= 12 && normalized.all { it.isDigit() || it in 'a'..'f' } ->
+                Verification(replied = true, ok = false, detail = "subelem mismatch: $reply")
+            else -> Verification(replied = false, ok = true, detail = "get unsupported ($reply); assume accepted")
+        }
+    }
+
+    /**
+     * Static candidates first, then a live scan of the well-known control directories so sockets
+     * with non-standard interface names (wlan2, vendor-renamed p2p devices on Android 15–17
+     * builds) are still discovered.
+     */
+    private fun existingControlSockets(): List<String> {
+        val found = CTRL_SOCKET_PATHS.filter { path ->
+            runAsRoot("test -S '$path' || test -e '$path'")
+        }.toMutableList()
+        CTRL_SOCKET_DIRS.forEach { dir ->
+            val listing = runAsRootOutput("ls -1 '$dir' 2>/dev/null") ?: return@forEach
+            listing.lineSequence()
+                .map { it.trim() }
+                .filter { it.startsWith("p2p") || it.startsWith("wlan") }
+                .forEach { name ->
+                    val full = "$dir/$name"
+                    if (full !in found && runAsRoot("test -S '$full' || test -e '$full'")) found += full
+                }
+        }
+        return found
+    }
+
+    /** Periodic re-advertisement: supplicant restarts and vendor scans silently clear WFD state. */
+    @Volatile private var keepAliveRunning = false
+    @Volatile private var keepAliveThread: Thread? = null
+
+    fun startKeepAlive(context: Context, periodMs: Long = 45_000L) {
+        if (keepAliveRunning) return
+        keepAliveRunning = true
+        val appContext = context.applicationContext
+        keepAliveThread = Thread({
+            while (keepAliveRunning) {
+                runCatching { advertiseSink(appContext) }
+                var sleptMs = 0L
+                while (keepAliveRunning && sleptMs < periodMs) {
+                    Thread.sleep(1_000L)
+                    sleptMs += 1_000L
+                }
+            }
+        }, "wfd-keepalive").apply { isDaemon = true; start() }
+    }
+
+    fun stopKeepAlive() {
+        keepAliveRunning = false
+        keepAliveThread = null
     }
 
     private fun runAsRoot(command: String): Boolean = try {
@@ -239,6 +328,21 @@ object WfdRootHelper {
     } catch (e: Exception) {
         Timber.d("WFD root unavailable: ${e.message}")
         false
+    }
+
+    private fun runAsRootOutput(command: String): String? = try {
+        val process = ProcessBuilder("su", "-c", command)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().readText().trim()
+        val exit = process.waitFor()
+        if (exit == 0) output.ifEmpty { null } else {
+            Timber.d("WFD root query failed exit=$exit output=${output.take(200)}")
+            null
+        }
+    } catch (e: Exception) {
+        Timber.d("WFD root query unavailable: ${e.message}")
+        null
     }
 
     private fun runAsRootCapture(command: String): String? = try {

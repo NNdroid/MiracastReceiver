@@ -130,7 +130,11 @@ dependencies {
     implementation("androidx.media3:media3-ui:$media3Version")
     implementation("androidx.media3:media3-common:$media3Version")
 
-    implementation("org.webrtc:google-webrtc:1.0.32006")
+    // Maintained libwebrtc build (org.webrtc package preserved). The archived
+    // org.webrtc:google-webrtc:1.0.32006 ships 4KB-aligned native libs that cannot load on
+    // 16KB-page devices (Android 15+); stream-webrtc-android >= 1.3 supports them, keeping the
+    // receiver WebRTC-capable through Android 17.
+    implementation("io.getstream:stream-webrtc-android:1.3.10")
     implementation("com.jakewharton.timber:timber:5.0.1")
     implementation("com.google.zxing:core:3.5.4")
     implementation("org.bouncycastle:bcprov-jdk18on:1.86")

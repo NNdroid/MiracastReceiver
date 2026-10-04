@@ -8,10 +8,12 @@ import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pGroup
 import android.net.wifi.p2p.WifiP2pManager
 import android.net.wifi.p2p.nsd.WifiP2pDnsSdServiceInfo
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
 import timber.log.Timber
+import java.lang.reflect.InvocationTargetException
 
 /** Wi-Fi Direct control plane for the Miracast sink. */
 class WifiDirectManager(
@@ -22,6 +24,15 @@ class WifiDirectManager(
     private val mainHandler = Handler(Looper.getMainLooper())
     private val manager: WifiP2pManager? by lazy {
         appContext.getSystemService(Context.WIFI_P2P_SERVICE) as? WifiP2pManager
+    }
+
+    private companion object {
+        /**
+         * Reflection name candidates for WifiP2pManager's WFD entry point, ordered by Android
+         * version: `setWfdInfo` resolves on API 30–37 (@SystemApi), `setWFDInfo` on API 23–29 and
+         * as the hidden twin on 30–R. Trying both keeps every supported release covered.
+         */
+        val WFD_METHOD_CANDIDATES = listOf("setWfdInfo", "setWFDInfo")
     }
 
     private var channel: WifiP2pManager.Channel? = null
@@ -72,7 +83,13 @@ class WifiDirectManager(
             prepareCompatibleTopology()
 
             if (!rootAdvertised) WfdRootHelper.refreshAdvertisingAsync(appContext)
-            Timber.i("Wi-Fi Direct started for Miracast (rootWfd=$rootAdvertised, topology=dual-role-sink-go-compatible)")
+            // Vendor supplicants (and framework P2P restarts on Android 12–17) can drop the
+            // injected WFD subelements; a slow periodic refresh keeps the sink discoverable.
+            WfdRootHelper.startKeepAlive(appContext)
+            Timber.i(
+                "Wi-Fi Direct started for Miracast (api=${Build.VERSION.SDK_INT}, " +
+                    "rootWfd=$rootAdvertised, topology=dual-role-sink-go-compatible)"
+            )
         } catch (e: Exception) {
             frameworkStarted = false
             Timber.e(e, "Failed to start Wi-Fi Direct")
@@ -95,23 +112,32 @@ class WifiDirectManager(
         }
     }
 
+    /**
+     * Push the Wi-Fi Display sink capability through the Android framework.
+     *
+     * Framework-API coverage across Android 6.0 (API 23) through Android 17 (API 37):
+     * - API 23–29: only the hidden `setWFDInfo(Channel, WifiP2pWfdInfo, ActionListener)` exists.
+     * - API 30–37: a `setWfdInfo` @SystemApi alias was added next to the hidden `setWFDInfo`
+     *   (@UnsupportedAppUsage maxTargetSdk = R), so from Android 12 the hidden name is blocked by
+     *   hidden-API enforcement for apps targeting S+ while the SystemApi name still resolves.
+     * - Every version requires the signature-level CONFIGURE_WIFI_DISPLAY permission inside
+     *   WifiP2pServiceImpl, so non-privileged apps are rejected at runtime regardless of name.
+     *   Both candidates are therefore tried in turn and any rejection falls back to the
+     *   root/supplicant injection in [WfdRootHelper], which remains the authoritative path.
+     */
     private fun setWfdInfo() {
         val ch = channel ?: return
+        val p2p = p2pManager() ?: return
+        val api = Build.VERSION.SDK_INT
         try {
             val wfdInfoClass = Class.forName("android.net.wifi.p2p.WifiP2pWfdInfo")
-            val wfdInfo = wfdInfoClass.getDeclaredConstructor().newInstance()
+            val wfdInfo = createWfdInfo(wfdInfoClass)
             wfdInfoClass.getMethod("setWfdEnabled", Boolean::class.java).invoke(wfdInfo, true)
             wfdInfoClass.getMethod("setDeviceType", Int::class.java).invoke(wfdInfo, 1) // primary sink
             wfdInfoClass.getMethod("setSessionAvailable", Boolean::class.java).invoke(wfdInfo, true)
             wfdInfoClass.getMethod("setControlPort", Int::class.java).invoke(wfdInfo, 7236)
             wfdInfoClass.getMethod("setMaxThroughput", Int::class.java).invoke(wfdInfo, 50)
-            val method = WifiP2pManager::class.java.getMethod(
-                "setWFDInfo",
-                WifiP2pManager.Channel::class.java,
-                wfdInfoClass,
-                WifiP2pManager.ActionListener::class.java
-            )
-            method.invoke(p2pManager(), ch, wfdInfo, object : WifiP2pManager.ActionListener {
+            val listener = object : WifiP2pManager.ActionListener {
                 override fun onSuccess() {
                     Timber.i("WFD Info set through Android framework")
                     WfdRootHelper.refreshAdvertisingAsync(appContext)
@@ -120,11 +146,47 @@ class WifiDirectManager(
                     Timber.w("Framework setWFDInfo failed: ${reasonText(reason)}; using root fallback")
                     WfdRootHelper.refreshAdvertisingAsync(appContext)
                 }
-            })
+            }
+            var lastFailure: Exception? = null
+            for (name in WFD_METHOD_CANDIDATES) {
+                val method = try {
+                    WifiP2pManager::class.java.getMethod(
+                        name,
+                        WifiP2pManager.Channel::class.java,
+                        wfdInfoClass,
+                        WifiP2pManager.ActionListener::class.java
+                    )
+                } catch (e: NoSuchMethodException) {
+                    Timber.d("Framework WFD API $name not resolvable on API $api: ${e.message}")
+                    lastFailure = e
+                    continue
+                }
+                try {
+                    method.invoke(p2p, ch, wfdInfo, listener)
+                    Timber.i("Framework WFD info submitted via $name (API $api)")
+                    return
+                } catch (e: InvocationTargetException) {
+                    Timber.d(
+                        "Framework $name rejected on API $api (CONFIGURE_WIFI_DISPLAY is signature-only): " +
+                            "${e.cause?.message ?: e.message}"
+                    )
+                    lastFailure = e
+                }
+            }
+            throw (lastFailure ?: IllegalStateException("no framework WFD setter available on API $api"))
         } catch (e: Exception) {
-            Timber.d("Framework WFD API unavailable/denied: ${e.message}")
+            Timber.i("Framework WFD API unavailable on API $api (expected for non-privileged apps): ${e.message}")
             WfdRootHelper.refreshAdvertisingAsync(appContext)
         }
+    }
+
+    /** API 23–29 ships only `WifiP2pWfdInfo()`; API 30+ adds the `(deviceType, port, throughput)` ctor. */
+    private fun createWfdInfo(wfdInfoClass: Class<*>): Any = try {
+        wfdInfoClass.getDeclaredConstructor().newInstance()
+    } catch (e: Exception) {
+        wfdInfoClass.getDeclaredConstructor(Int::class.javaPrimitiveType!!, Int::class.javaPrimitiveType!!, Int::class.javaPrimitiveType!!)
+            .apply { isAccessible = true }
+            .newInstance(1, 7236, 50)
     }
 
     /**
@@ -323,6 +385,7 @@ class WifiDirectManager(
         receiver?.let { runCatching { appContext.unregisterReceiver(it) } }
         receiver = null
         channel = null
+        WfdRootHelper.stopKeepAlive()
         Timber.i("Wi-Fi Direct stopped")
     }
 

@@ -30,6 +30,14 @@
         android:keepScreenOn="true"
         android:visibility="gone" />
 
+    <org.webrtc.SurfaceViewRenderer
+        android:id="@+id/webrtc_surface"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_gravity="center"
+        android:keepScreenOn="true"
+        android:visibility="gone" />
+
     <ImageView
         android:id="@+id/image_view"
         android:layout_width="match_parent"

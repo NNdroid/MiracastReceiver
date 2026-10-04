@@ -4,7 +4,7 @@
 [![Android](https://img.shields.io/badge/Android-5.0%2B-3DDC84?logo=android&logoColor=white)](https://developer.android.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-MiracastReceiver is an Android TV casting receiver designed for always-on use. It supports AirPlay, DLNA/UPnP, Miracast/Wi-Fi Display, direct HTTP media playback, a remote WebUI, background auto-start, Android TV remote navigation, and hardware-accelerated playback where supported by the device.
+MiracastReceiver is an Android TV casting receiver designed for always-on use. It supports AirPlay, DLNA/UPnP, Miracast/Wi-Fi Display, WebRTC, direct HTTP media playback, a remote WebUI, background auto-start, Android TV remote navigation, and hardware-accelerated playback where supported by the device.
 
 The project is optimized for TV usage: it can keep the receiver service running after the UI is closed, exposes a 10-foot Android TV interface, provides a browser-based control center, and can use Root or Shizuku for additional background and Miracast-related integration on devices that need it.
 
@@ -30,6 +30,22 @@ The project is optimized for TV usage: it can keep the receiver service running 
   - H.264 hardware decode through MediaCodec
   - AAC / LPCM audio handling
   - Designed for low-latency second-screen use
+  - WFD sink advertisement adapted for Android 6.0 through Android 17 (see
+    [WFD injection across Android versions](#wfd-injection-across-android-versions))
+
+- **WebRTC**
+  - Built-in HTTP/WebSocket signaling server (phase 1)
+    - Default preferred port: `18095`
+    - Serves a ready-to-use browser test sender at `http://<TV_IP>:18095/`
+    - JSON signaling: SDP Offer/Answer exchange, ICE candidate exchange (trickle),
+      `welcome`/`state`/`error` events, heartbeat `ping`/`pong`, and `bye` teardown
+  - PeerConnection receive and playback (phase 2)
+    - PeerConnection creation and configuration with hardware video codecs
+    - Video track reception rendered through `SurfaceViewRenderer` in the player
+    - Audio track reception played back through libwebrtc's `AudioTrack` output
+    - LAN-direct connectivity (host candidates; no STUN server required)
+  - Works with any WebRTC client that speaks the signaling protocol; the bundled
+    browser page can share the screen, a window, a browser tab, or the camera/microphone
 
 - **Direct HTTP media playback**
   - Push a media URL from the WebUI directly to the TV
@@ -93,6 +109,8 @@ The project is optimized for TV usage: it can keep the receiver service running 
 | Windows / Linux media apps | DLNA / HTTP | Supported | Depends on sender capabilities |
 | Emby / similar media servers | DLNA | Supported | Client behavior may vary |
 | Browser / WebUI | HTTP / HLS / DASH | Supported | Push a direct URL to the TV player |
+| Browser (Chrome / Edge) | WebRTC | Supported | Open `http://<TV_IP>:18095/` and share screen or camera |
+| Custom apps | WebRTC | Supported | Any client speaking the WebSocket signaling protocol |
 
 ## Requirements
 
@@ -100,7 +118,7 @@ The project is optimized for TV usage: it can keep the receiver service running 
 - Android TV or Google TV is the primary target
 - LAN connectivity for discovery and WebUI access
 - JDK 17 for development builds
-- Android SDK API 36 for compilation
+- Android SDK API 37 for compilation (supports devices up to Android 17)
 
 Some Miracast features depend on the TV firmware. Devices that already expose a system Wi-Fi Display implementation generally work more easily. Other devices may require Root to expose or modify WFD-related behavior.
 
@@ -172,6 +190,62 @@ https://example.com/video.mp4
 The player accepts only `http://` and `https://` URLs from this feature. Dangerous URI schemes such as `file://`, `content://`, `intent:`, `javascript:`, and `data:` are rejected.
 
 Temporary network failures use bounded retry logic, and playback can resume when network connectivity returns.
+
+## WebRTC Casting
+
+WebRTC casting runs in two phases, both enabled by default (`webrtcEnabled` in the WebUI protocols page):
+
+### Phase 1 — HTTP/WebSocket signaling server
+
+- Preferred port `18095` (configurable as `webrtcPort`; the server walks upward past occupied ports like the WebUI does).
+- `GET /` serves the bundled browser test sender; `GET /health` returns a JSON status snapshot.
+- Any WebSocket upgrade starts a signaling session. One sender session is active at a time; a new session replaces the previous one.
+- JSON message set:
+  - Client → receiver: `{"type":"offer","sdp":...}`, `{"type":"candidate","sdpMid":..,"sdpMLineIndex":..,"candidate":..}`, `{"type":"ping"}`, `{"type":"bye"}`
+  - Receiver → client: `{"type":"welcome","name":..,"port":..}`, `{"type":"answer","sdp":...}`, `{"type":"candidate",...}`, `{"type":"state","state":...}`, `{"type":"pong"}`, `{"type":"error","message":..}`
+
+### Phase 2 — receive and playback
+
+- PeerConnection is configured for LAN-direct use (host candidates, continual gathering, no STUN needed).
+- Incoming video tracks render into a `SurfaceViewRenderer` inside the TV player (launched automatically when casting starts); incoming audio tracks play through libwebrtc's `AudioTrack` output module.
+- Hardware video decoding/encoding paths are enabled through libwebrtc's factories with a shared `EglBase` context.
+
+### Browser test sender
+
+1. Open `http://<TV_IP>:18095/` in a desktop browser.
+2. Choose **Screen/Window** (`getDisplayMedia`, with optional system audio) or **Camera + Microphone**.
+3. Click **连接并开始投屏**; the TV launches the WebRTC player automatically.
+
+Browsers only expose `getDisplayMedia`/`getUserMedia` in secure contexts. The page shows in-place guidance when opened over plain HTTP; easiest options are saving the page and opening it via `file://`, or adding the TV address to Chrome's `chrome://flags/#unsafely-treat-insecure-origin-as-secure` list. Custom WebRTC clients are unaffected by this browser restriction.
+
+## WFD injection across Android versions
+
+Android's Wi-Fi Display (WFD) capability can only be broadcast by `wpa_supplicant`. The framework
+entry points (`WifiP2pManager.setWfdInfo` / `setWFDInfo`) require the signature-level
+`CONFIGURE_WIFI_DISPLAY` permission on every release, so ordinary applications are always rejected
+there. MiracastReceiver therefore injects the WFD sink IE directly into the supplicant control
+socket via root, and adapts to each Android release:
+
+| Android | Framework API surface | Receiver behavior |
+|---|---|---|
+| 6.0–11 (API 23–30) | hidden `setWFDInfo(Channel, WifiP2pWfdInfo, ActionListener)` only | reflected by name, rejected without the signature permission, falls back to root injection |
+| 12–17 (API 31–37) | hidden `setWFDInfo` blocked by hidden-API enforcement (`maxTargetSdk = R`); `setWfdInfo` @SystemApi added | both reflection names are tried in turn; both fail for non-privileged apps, root injection remains authoritative |
+
+The root injection path is hardened for the same range:
+
+- Supplicant control sockets are discovered dynamically: well-known `p2p-dev-*`/`wlan*`/`p2p0`
+  candidates under `/data/vendor/wifi/wpa/sockets` and `/data/misc/wifi/sockets` are checked first,
+  then both directories are scanned for sockets with vendor-specific interface names (common on
+  Android 15–17 builds).
+- After `SET wifi_display 1` + `WFD_SUBELEM_SET 0 ...`, the state is read back
+  (`GET wifi_display`, `WFD_SUBELEM_GET 0`). A socket whose read-back disagrees is skipped, and a
+  blocked supplicant reply is reported as *unverified* instead of silently successful.
+- A periodic keep-alive (45 s) re-advertises the sink because supplicant restarts and vendor scans
+  clear the injected WFD subelements.
+
+If injection fails everywhere, the WebUI `lastError` field and logcat (`WfdRootHelper`) show the
+reason; the usual causes are a supplicant built without `CONFIG_WIFI_DISPLAY` or an SELinux policy
+blocking the control socket.
 
 ## Android TV Remote Control Behavior
 
@@ -245,6 +319,7 @@ app/build/outputs/apk/
 - Android TV / Leanback components
 - Media3 / ExoPlayer
 - MediaCodec
+- libwebrtc (`io.getstream:stream-webrtc-android`, `org.webrtc` API surface)
 - OkHttp
 - Kotlin Coroutines
 - ZXing
@@ -284,6 +359,7 @@ DLNA, AirPlay, and Miracast implementations vary across vendors. Some applicatio
 ## Security Notes
 
 - The WebUI is intended for trusted local networks.
+- The WebRTC signaling server (`18095`) performs no authentication, mirroring how AirPlay/Miracast receivers behave; keep it disabled in untrusted networks via the WebUI protocols page.
 - Keep token authentication enabled unless unauthenticated LAN control is explicitly desired.
 - A custom WebUI token should be unique and not reused as an account password.
 - Direct media playback restricts remote URLs to HTTP and HTTPS.

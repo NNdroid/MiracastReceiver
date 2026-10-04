@@ -38,6 +38,10 @@ object RuntimeState {
     @Volatile var miracastClient: String = ""
     @Volatile var miracastRtpPort: Int = 0
 
+    @Volatile var webrtcState: String = "IDLE"
+    @Volatile var webrtcClient: String = ""
+    @Volatile var webrtcSignalingPort: Int = 0
+
     private val playbackRef = AtomicReference(PlaybackSnapshot())
 
     fun playbackSnapshot(): PlaybackSnapshot = playbackRef.get()

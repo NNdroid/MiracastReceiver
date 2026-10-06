@@ -2,10 +2,12 @@ package com.weekd.miracastreceiver.miracast
 
 import android.content.Context
 import android.net.wifi.WifiManager
+import android.os.Build
 import android.os.Looper
 import android.os.SystemClock
 import timber.log.Timber
 import java.io.File
+import java.util.zip.ZipFile
 
 /** Root-assisted Wi-Fi Display sink advertisement and peer diagnostics. */
 object WfdRootHelper {
@@ -100,14 +102,65 @@ object WfdRootHelper {
         return null
     }
 
+    /**
+     * Resolve the wfdctl helper path. The helper is packaged as `lib/arm*/libwfdctl.so` so it
+     * travels with the APK, but on-device native-lib extraction is disabled on many builds:
+     * `applicationInfo.nativeLibraryDir` then points at a directory that holds nothing, and the
+     * helper has to be unpacked from the APK ourselves.
+     */
+    private fun helperBinary(context: Context): String? {
+        val appContext = context.applicationContext
+        val packaged = File(appContext.applicationInfo.nativeLibraryDir, BINARY_NAME)
+        if (packaged.exists()) return packaged.absolutePath
+        return extractHelperFromApk(appContext)
+    }
+
+    /**
+     * Unpack the helper straight out of the APK when the platform never extracted it. Writing
+     * through the system zip is not enough on its own: app-owned files are not executable for the
+     * `su` domain, so the mode is fixed up under root afterwards.
+     */
+    private fun extractHelperFromApk(appContext: Context): String? {
+        if (Looper.myLooper() == Looper.getMainLooper()) return null
+        val apk = appContext.packageInfo?.applicationSourceDir ?: return null
+        val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: return null
+        val entryName = "lib/$abi/$BINARY_NAME"
+        val dest = File(File(appContext.filesDir, "wfdctl"), BINARY_NAME)
+
+        val extractedPath = runCatching {
+            ZipFile(apk.absolutePath).use { zip ->
+                val entry = zip.getEntry(entryName) ?: return@runCatching null
+                val directory = dest.parentFile ?: return@runCatching null
+                if (!directory.exists() && !directory.mkdirs()) return@runCatching null
+                val staging = File(directory, "$BINARY_NAME.tmp")
+                zip.getInputStream(entry).use { input ->
+                    staging.outputStream().use { output -> input.copyTo(output) }
+                }
+                if (!staging.renameTo(dest) && dest.exists()) staging.delete()
+                if (dest.exists()) dest.absolutePath else null
+            }
+        }.getOrElse {
+            Timber.w(it, "WFD: could not read $entryName out of the APK")
+            null
+        }
+
+        if (extractedPath == null) {
+            Timber.w("WFD: $entryName is not present in the APK; the helper cannot be unpacked")
+            return null
+        }
+        if (runAsRoot("chmod 755 '$extractedPath'").exitCode != 0) {
+            Timber.w("WFD: could not make $extractedPath executable for su")
+        }
+        Timber.w("WFD: native libraries were not extracted on this device; using $extractedPath")
+        return extractedPath
+    }
+
     fun discoverSourceControlPort(context: Context): Int? {
         if (Looper.myLooper() == Looper.getMainLooper()) return null
-        val appContext = context.applicationContext
-        val binary = File(appContext.applicationInfo.nativeLibraryDir, BINARY_NAME)
-        if (!binary.exists()) return null
+        val binaryPath = helperBinary(context) ?: return null
 
         for (socketPath in existingControlSockets()) {
-            val command = "${binary.absolutePath} $socketPath \"P2P_PEER FIRST\""
+            val command = "$binaryPath $socketPath \"P2P_PEER FIRST\""
             val output = runAsRootCapture(command) ?: continue
             val port = parsePeerControlPort(output)
             if (port != null) {
@@ -141,12 +194,20 @@ object WfdRootHelper {
 
         return try {
             val appContext = context.applicationContext
-            val binary = File(appContext.applicationInfo.nativeLibraryDir, BINARY_NAME)
-            if (!binary.exists()) {
-                lastAdvertisementStatus = AdvertisementStatus(false, detail = "$BINARY_NAME missing")
-                Timber.w("WFD: $BINARY_NAME not found in nativeLibraryDir")
+            val binaryPath = helperBinary(appContext) ?: run {
+                lastAdvertisementStatus = AdvertisementStatus(
+                    success = false,
+                    detail = "$BINARY_NAME missing: not in nativeLibraryDir " +
+                        appContext.applicationInfo.nativeLibraryDir + " and not unpackable from the APK"
+                )
+                Timber.w(
+                    "WFD: $BINARY_NAME unavailable, so nothing can be advertised " +
+                        "(nativeLibraryDir=${appContext.applicationInfo.nativeLibraryDir})"
+                )
                 return false
             }
+            // The vendor switch that gates WFD discovery is off by default on several boxes.
+            runAsRoot("settings put global wifi_display_on 1")
 
             val candidates = existingControlSockets()
             if (candidates.isEmpty()) {
@@ -156,7 +217,6 @@ object WfdRootHelper {
             }
 
             val payload = subelemHex(controlPort)
-            val binaryPath = binary.absolutePath
 
             // One attempt per socket, then pick the best. Scoring order matters: the correct
             // interface type beats an acknowledged reply on the wrong one, and an acknowledged
@@ -279,9 +339,10 @@ object WfdRootHelper {
             return true
         }
 
-        val binary = File(context.applicationContext.applicationInfo.nativeLibraryDir, BINARY_NAME)
-        if (!binary.exists()) {
+        val binaryPath = helperBinary(context)
+        if (binaryPath == null) {
             lastGroupOwnerIntentConfigured = false
+            Timber.w("WFD: helper binary unavailable, group owner intent not configured")
             return false
         }
 
@@ -294,7 +355,7 @@ object WfdRootHelper {
 
         var acknowledged = false
         for (socketPath in sockets) {
-            val exit = runAsRoot("${binary.absolutePath} $socketPath \"P2P_SET go_int $GO_OWNER_INTENT\"").exitCode
+            val exit = runAsRoot("${binaryPath} $socketPath \"P2P_SET go_int $GO_OWNER_INTENT\"").exitCode
             when (exit) {
                 WFDCTL_OK -> {
                     acknowledged = true
@@ -332,12 +393,11 @@ object WfdRootHelper {
         lastAdvertisementStatus = AdvertisementStatus(success = false, detail = "stopped")
         lastGroupOwnerIntentConfigured = false
 
-        val binary = File(context.applicationContext.applicationInfo.nativeLibraryDir, BINARY_NAME)
-        if (!binary.exists()) return false
+        val binaryPath = helperBinary(context) ?: return false
         var sent = false
         existingControlSockets().forEach { socketPath ->
             if (runAsRoot(
-                    "${binary.absolutePath} $socketPath " +
+                    "${binaryPath} $socketPath " +
                         "\"P2P_EXT_LISTEN\" \"SET wifi_display 0\""
                 ).exitCode != WFDCTL_REJECTED
             ) sent = true
@@ -360,8 +420,11 @@ object WfdRootHelper {
         // The single most common reason a sink never appears: the Wi-Fi radio is off on an
         // Ethernet-only TV box, so P2P never initializes and no p2p-dev-* socket ever exists.
         out["wifiEnabled"] = if (wifi == null) "WIFI_SERVICE_MISSING" else wifi.isWifiEnabled.toString()
-        val binary = File(appContext.applicationInfo.nativeLibraryDir, BINARY_NAME)
-        out["wfdctlBinary"] = if (binary.exists()) binary.absolutePath else "MISSING: $BINARY_NAME"
+        val binaryPath = helperBinary(appContext)
+        out["nativeLibraryDir"] = appContext.applicationInfo.nativeLibraryDir
+        out["nativeLibOnDisk"] = File(appContext.applicationInfo.nativeLibraryDir, BINARY_NAME).exists().toString()
+        out["wfdctlBinary"] = binaryPath
+            ?: "MISSING: $BINARY_NAME (absent from nativeLibraryDir and not unpackable from the APK)"
         val sockets = existingControlSockets()
         out["controlSockets"] = sockets.joinToString(", ") { "${it}[${kindOf(it)}]" }.ifEmpty { "NONE FOUND" }
         out["p2pDevSockets"] = sockets.filter { kindOf(it) == SocketKind.P2P_DEV }.joinToString(", ")
@@ -371,13 +434,13 @@ object WfdRootHelper {
         out["lastVerified"] = advertisementStatus().verified.toString()
         out["groupOwnerIntentConfigured"] = lastGroupOwnerIntentConfigured.toString()
 
-        if (binary.exists()) {
+        if (binaryPath != null) {
             val firstSocket = sockets.firstOrNull()
             if (firstSocket != null) {
                 out["wfdSubelemReadback"] = runAsRootOutput(
-                    "${binary.absolutePath} $firstSocket \"WFD_SUBELEM_GET 0\""
+                    "${binaryPath} $firstSocket \"WFD_SUBELEM_GET 0\""
                 ) ?: "no output"
-                out["p2pGet"] = runAsRootOutput("${binary.absolutePath} $firstSocket \"P2P_GET\"") ?: "no output"
+                out["p2pGet"] = runAsRootOutput("${binaryPath} $firstSocket \"P2P_GET\"") ?: "no output"
             }
             out["wfdSupport"] = wpaSupplicantWfdSupport()
         }

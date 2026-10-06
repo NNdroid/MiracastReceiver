@@ -63,6 +63,11 @@ android {
     }
 
     packaging {
+        // wfdctl is an executable shipped as lib/arm*/libwfdctl.so and is exec'd by su, so the
+        // native libraries must be extracted to disk and not mmap'd straight out of the APK.
+        jniLibs {
+            useLegacyPackaging = true
+        }
         resources {
             excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
         }

@@ -10,6 +10,8 @@ class XiaomiMiracastInteropSourceTest {
     private val server = File("src/main/java/com/weekd/miracastreceiver/miracast/WfdServer.kt").readText()
     private val session = File("src/main/java/com/weekd/miracastreceiver/miracast/WfdSessionHandler.kt").readText()
     private val rootHelper = File("src/main/java/com/weekd/miracastreceiver/miracast/WfdRootHelper.kt").readText()
+    private val manifest = File("src/main/AndroidManifest.xml").readText()
+    private val appBuild = File("build.gradle.kts").readText()
 
     @Test
     fun sinkCreatesItsOwnGroupOwnerGroupOrItIsInvisibleToSources() {
@@ -73,6 +75,31 @@ class XiaomiMiracastInteropSourceTest {
         assertTrue(wifiDirect.contains("setWifiEnabled(true)"))
         assertTrue(wifiDirect.contains("WIFI_ENABLED_BY_APP"))
         assertTrue(wifiDirect.contains("WIFI_CANT_ENABLE"))
+    }
+
+    @Test
+    fun wfdHelperSurvivesDisabledNativeLibraryExtraction() {
+        // With extractNativeLibs=false the platform never populates nativeLibraryDir, the helper
+        // is silently absent, and every WFD command turns into a no-op — so the sink is invisible
+        // with nothing in the logs but "libwfdctl.so missing". The binary must be unpacked out of
+        // the APK, and every call site must go through that resolver.
+        assertTrue(rootHelper.contains("private fun helperBinary(context: Context)"))
+        assertTrue(rootHelper.contains("private fun extractHelperFromApk("))
+        assertTrue(rootHelper.contains("packageInfo?.applicationSourceDir"))
+        assertTrue(rootHelper.contains("lib/$abi/$BINARY_NAME"))
+        assertTrue(rootHelper.contains("chmod 755 '$extractedPath'"))
+        assertTrue(rootHelper.contains("helperBinary(context) ?: return null"))
+        assertTrue(rootHelper.contains("helperBinary(appContext) ?: run {"))
+        assertFalse(rootHelper.contains("binary.exists()"))
+    }
+
+    @Test
+    fun nativeLibrariesAreForcedOntoDiskBecauseTheHelperIsExecuted() {
+        // wfdctl is an executable that su launches, not a library the linker dlopens. While AGP
+        // keeps the native payload inside the APK, nativeLibraryDir is empty at runtime and
+        // Miracast discovery cannot start at all.
+        assertTrue(manifest.contains("android:extractNativeLibs=\"true\""))
+        assertTrue(appBuild.contains("useLegacyPackaging = true"))
     }
 
     @Test

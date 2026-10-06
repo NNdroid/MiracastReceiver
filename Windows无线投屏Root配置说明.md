@@ -191,6 +191,10 @@ RTP 负载类型为 **33（MP2T）**，每包 1328 字节 = 12 字节 RTP 头 + 
 | `miracast.socketKind` | 广播落到的接口类型 | 必须是 `P2P_DEV`；`STA_FALLBACK` 发出的 IE 不会变成 P2P 广播 |
 | `miracast.groupOwnerIntentConfigured` | `P2P_SET go_int 15` 是否被接受 | `false` = 可能抢不到 GO，手机扫不到 |
 | `miracast.detail` | 本次广播的完整描述，含 `verified=` / `socket=` / 接口类型告警 | 直接读这一段通常就能定位 |
+| `miracast.checks.wfdctlBinary` | 帮助程序 `libwfdctl.so` 的实际路径 | `MISSING` = 二进制既没被系统解压也解不出来，整条链路直接空转 |
+| `miracast.checks.nativeLibOnDisk` | 系统有没有把 native 库解压到磁盘 | `false` 说明 `extractNativeLibs` 关着，应用会自己从 APK 解到 `filesDir` |
+| `miracast.checks.wifiEnabled` | Wi-Fi 射频开关 | `false` = P2P 不会初始化，`p2p-dev-*` 永远不存在 |
+| `miracast.checks.wifiDisplaySetting` | `settings get global wifi_display_on` | `0` 时部分固件直接关掉 WFD 发现；应用会在广播前写成 `1` |
 | `miracast.checks.p2pDevSockets` | 实际找到的 `p2p-dev-*` | `NONE` 说明 P2P 还没初始化成功，或 Wi-Fi Direct 权限没给 |
 | `miracast.checks.wfdSupport` | 固件的 `wpa_supplicant` 是否包含 `WFD_SUBELEM` 符号 | 出现 `no WFD_SUBELEM symbol` 就是驱动编译时没开 Wi-Fi Display |
 | `miracast.checks.wfdSubelemReadback` | 现场 `WFD_SUBELEM_GET 0` 的原始输出 | 与写入的 `000600111c440032` 比对 |

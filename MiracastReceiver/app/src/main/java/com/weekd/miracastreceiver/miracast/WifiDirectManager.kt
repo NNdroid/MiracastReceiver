@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.net.wifi.WifiManager
 import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pGroup
 import android.net.wifi.p2p.WifiP2pManager
@@ -78,6 +79,11 @@ class WifiDirectManager(
         WfdSourceHint.clear()
 
         Thread({
+            if (!isStarted) return@Thread
+            // Wi-Fi Direct has no radio while Wi-Fi is off, and an Ethernet-connected TV box ships
+            // with Wi-Fi disabled by default. With the radio down there is no p2p-dev-* socket at
+            // all, so the sink can advertise nothing and is invisible to every source.
+            if (!wifiEnabledOrEnable()) return@Thread
             // requestPermissions is @MainThread, so the permission probe happens here and the
             // actual request on the main handler.
             val granted = p2pPermissionsGranted()
@@ -86,6 +92,30 @@ class WifiDirectManager(
                 mainHandler.post { startFrameworkP2p(p2p) }
             }
         }, "wfd-prepare").apply { isDaemon = true }.start()
+    }
+
+    /**
+     * Turn the Wi-Fi radio on before touching P2P, and wait for it to come up. Runs off the main
+     * thread because the wait is real.
+     */
+    private fun wifiEnabledOrEnable(): Boolean {
+        val wifi = appContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            ?: run {
+                RuntimeStateMiracast.report("WIFI_SERVICE_MISSING")
+                Timber.e("Wi-Fi service unavailable; Miracast cannot be advertised")
+                return false
+            }
+        if (wifi.isWifiEnabled) return true
+        Timber.w("Wi-Fi is disabled, enabling it so Wi-Fi Direct can initialize for Miracast")
+        val enabled = runCatching { wifi.setWifiEnabled(true) }.getOrDefault(false)
+        RuntimeStateMiracast.report(if (enabled) "WIFI_ENABLED_BY_APP" else "WIFI_CANT_ENABLE")
+        if (!enabled) {
+            Timber.e("Cannot enable Wi-Fi from here; the sink will stay invisible to Miracast sources")
+            return false
+        }
+        // The radio and the P2P device need a moment to come up before initialize() succeeds.
+        runCatching { Thread.sleep(2_000L) }
+        return wifi.isWifiEnabled
     }
 
     private fun startFrameworkP2p(p2p: WifiP2pManager) {

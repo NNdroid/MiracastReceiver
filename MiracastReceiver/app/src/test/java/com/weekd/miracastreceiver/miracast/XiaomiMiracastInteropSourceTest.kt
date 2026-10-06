@@ -65,6 +65,17 @@ class XiaomiMiracastInteropSourceTest {
     }
 
     @Test
+    fun wiFiRadioIsOnBeforeP2pInitializesOrNothingCanBeAdvertised() {
+        // Wi-Fi Direct has no radio while Wi-Fi is disabled, and an Ethernet-connected TV box
+        // ships with Wi-Fi off. If initialize() is never reached there is no p2p-dev-* socket,
+        // so the sink cannot emit a WFD element and is invisible to every source.
+        assertTrue(wifiDirect.contains("private fun wifiEnabledOrEnable()"))
+        assertTrue(wifiDirect.contains("setWifiEnabled(true)"))
+        assertTrue(wifiDirect.contains("WIFI_ENABLED_BY_APP"))
+        assertTrue(wifiDirect.contains("WIFI_CANT_ENABLE"))
+    }
+
+    @Test
     fun sinkAdvertisementStateIsExposedSoFailureIsDiagnosable() {
         assertTrue(wifiDirect.contains("RuntimeStateMiracast.report("))
         assertTrue(rootHelper.contains("fun diagnostics(context: Context)"))

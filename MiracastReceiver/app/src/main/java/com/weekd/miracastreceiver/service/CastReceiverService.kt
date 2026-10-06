@@ -569,14 +569,13 @@ class CastReceiverService : Service() {
         }
 
         if (settings.miracastEnabled) {
+            // WfdRootHelper.advertiseSink is deliberately not called here. At this point P2P has
+            // not been initialized, so the only control socket present is the STA wlan0, which
+            // cannot emit a P2P advertisement at all; it would also run a root subprocess on the
+            // main thread. WifiDirectManager performs the injection itself, after initialize()
+            // and on a worker thread, where p2p-dev-* actually exists.
             runCatching { wifiDirectManager.start() }
                 .onFailure { failures += "Wi-Fi Direct: ${it.message}"; Timber.e(it, "Wi-Fi Direct start failed") }
-            runCatching {
-                if (!WfdRootHelper.advertiseSink(this)) {
-                    failures += "WFD IE injection failed"
-                    Timber.w("Miracast WFD IE injection failed; Windows discovery may not work")
-                }
-            }
             runCatching { wfdServer.start() }
                 .onFailure { failures += "WFD RTSP: ${it.message}"; Timber.e(it, "WFD server start failed") }
         }

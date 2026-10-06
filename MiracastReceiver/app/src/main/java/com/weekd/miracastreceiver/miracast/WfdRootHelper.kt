@@ -1,6 +1,7 @@
 package com.weekd.miracastreceiver.miracast
 
 import android.content.Context
+import android.net.wifi.WifiManager
 import android.os.Looper
 import android.os.SystemClock
 import timber.log.Timber
@@ -355,6 +356,10 @@ object WfdRootHelper {
         val out = HashMap<String, String>()
         val appContext = context.applicationContext
         out["rootAvailable"] = isRootAvailable().toString()
+        val wifi = appContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+        // The single most common reason a sink never appears: the Wi-Fi radio is off on an
+        // Ethernet-only TV box, so P2P never initializes and no p2p-dev-* socket ever exists.
+        out["wifiEnabled"] = if (wifi == null) "WIFI_SERVICE_MISSING" else wifi.isWifiEnabled.toString()
         val binary = File(appContext.applicationInfo.nativeLibraryDir, BINARY_NAME)
         out["wfdctlBinary"] = if (binary.exists()) binary.absolutePath else "MISSING: $BINARY_NAME"
         val sockets = existingControlSockets()

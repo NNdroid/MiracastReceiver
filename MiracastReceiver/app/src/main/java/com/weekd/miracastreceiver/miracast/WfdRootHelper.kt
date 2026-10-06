@@ -122,7 +122,9 @@ object WfdRootHelper {
      */
     private fun extractHelperFromApk(appContext: Context): String? {
         if (Looper.myLooper() == Looper.getMainLooper()) return null
-        val apk = appContext.packageInfo?.applicationSourceDir ?: return null
+        // `Context.getPackageInfo` takes arguments, so there is no synthetic `packageInfo` property;
+        // `ApplicationInfo.sourceDir` is the APK path we need.
+        val apk = appContext.applicationInfo.sourceDir ?: return null
         val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: return null
         val entryName = "lib/$abi/$BINARY_NAME"
         val dest = File(File(appContext.filesDir, "wfdctl"), BINARY_NAME)

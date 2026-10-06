@@ -85,7 +85,7 @@ class XiaomiMiracastInteropSourceTest {
         // the APK, and every call site must go through that resolver.
         assertTrue(rootHelper.contains("private fun helperBinary(context: Context)"))
         assertTrue(rootHelper.contains("private fun extractHelperFromApk("))
-        assertTrue(rootHelper.contains("packageInfo?.applicationSourceDir"))
+        assertTrue(rootHelper.contains("applicationInfo.sourceDir"))
         assertTrue(rootHelper.contains("lib/$abi/$BINARY_NAME"))
         assertTrue(rootHelper.contains("chmod 755 '$extractedPath'"))
         assertTrue(rootHelper.contains("helperBinary(context) ?: return null"))

@@ -25,6 +25,69 @@ class XiaomiMiracastInteropSourceTest {
     }
 
     @Test
+    fun rootGroupFormationFallbackExistsBecauseTheFrameworkRefusesOnVendorBuilds() {
+        // createGroup() has no root equivalent and fails with ERROR on many vendor builds, leaving
+        // the sink without a group. Without a group there is no G/O beacon, so a source can list
+        // the device and still be unable to connect to it at all.
+        assertTrue(rootHelper.contains("GROUP_FORMATION"))
+        assertTrue(rootHelper.contains("fun formSinkGroup"))
+        assertTrue(rootHelper.contains("fun groupInterfaceExists()"))
+        assertTrue(rootHelper.contains("waitForGroupInterface"))
+        assertTrue(rootHelper.contains("SINK_GROUP_SSID"))
+        assertTrue(rootHelper.contains("fun setKeepAliveGroupFormation"))
+        assertTrue(wifiDirect.contains("scheduleFallbackGroupFormation()"))
+        assertTrue(wifiDirect.contains("formSinkGroupFallback()"))
+        assertTrue(wifiDirect.contains("SINK_GROUP_FORMED_ROOT"))
+    }
+
+    @Test
+    fun rootGroupFormationIsIdempotentSoAnAttachedSourceIsNeverDropped() {
+        // An existing group is left alone, because tearing it down would disconnect a source
+        // already attached to it — so the fallback must check before it creates.
+        assertTrue(rootHelper.contains("group already present"))
+        assertFalse(rootHelper.contains("GROUP_RELEASE"))
+    }
+
+    @Test
+    fun theWfdElementIsReinjectedIntoTheGroupOwnerBeaconAfterFormation() {
+        // WFD_SUBELEM_SET reaches the air only from the interface that carries the beacon, and
+        // p2p0 only exists once a group exists. Forming the group without re-injecting the IE
+        // therefore leaves a source with a group it can join but nothing inside it.
+        assertTrue(rootHelper.contains("/data/vendor/wifi/wpa/sockets/p2p0"))
+        assertTrue(wifiDirect.contains("WfdRootHelper.refreshAdvertisingAsync(appContext, force = true)"))
+    }
+
+    @Test
+    fun groupOwnerIntentIsReadBackAndReassertedOnEveryKeepAliveCycle() {
+        // An acknowledged P2P_SET is not proof the supplicant applied it, and nothing else re-sets
+        // the intent after startup — so it must be verified, and re-issued alongside the
+        // advertisement, or the sink loses Group Owner negotiation mid-session.
+        assertTrue(rootHelper.contains("fun parseGroupOwnerIntent"))
+        assertTrue(rootHelper.contains("fun groupOwnerIntentReadback"))
+        assertTrue(rootHelper.contains("P2P_GET"))
+        assertTrue(rootHelper.contains("lastGroupOwnerIntentReadback"))
+        assertTrue(rootHelper.contains("configureGroupOwnerIntent(appContext)"))
+        // The two separators are both read; accepting only one makes every read-back null and the
+        // check looks healthier than it is.
+        assertTrue(rootHelper.contains("[:=]"))
+    }
+
+    @Test
+    fun sinkDeclaresItsFullMiracastCapabilitySetInTheInformationElement() {
+        // Declaring only 1024x768 with no video capability makes strict sources drop the sink
+        // during connection setup even after the device is discovered.
+        assertTrue(rootHelper.contains("WFD_DEVICE_INFO = 0xCF1"))
+        assertFalse(rootHelper.contains("\"0011\""))
+    }
+
+    @Test
+    fun groupFormationIsVisibleInDiagnostics() {
+        assertTrue(rootHelper.contains("groupOwnerIntentReadback\""))
+        assertTrue(rootHelper.contains("groupFormation\""))
+        assertTrue(rootHelper.contains("not a Group Owner"))
+    }
+
+    @Test
     fun sinkKeepsToleratingASourceOwnedGroupAtTheRtspLayer() {
         assertTrue(wifiDirect.contains("Sink is GO (standard Android Source-compatible)"))
         assertTrue(wifiDirect.contains("Source is GO"))

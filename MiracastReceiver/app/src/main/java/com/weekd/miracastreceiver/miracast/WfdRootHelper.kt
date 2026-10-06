@@ -16,6 +16,24 @@ object WfdRootHelper {
     private const val ADVERTISE_THROTTLE_MS = 4_000L
     private const val GO_OWNER_INTENT = 15
 
+    /**
+     * Group identity used when the framework will not create the group. A Source joins through the
+     * WSC group information carried in the G/O beacon, so these only need to be present and legal.
+     */
+    internal const val SINK_GROUP_SSID = "MiracastSink"
+
+    /**
+     * Passphrase for a root-formed group, randomized once per process so no shared secret ships in
+     * the binary. Within a session it must stay stable, or a re-formed group becomes a different
+     * network for anyone already tuned to it.
+     */
+    internal val sinkGroupPassphrase: String by lazy {
+        val alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+        val rng = java.security.SecureRandom()
+        CharArray(16).apply { for (i in indices) this[i] = alphabet[rng.nextInt(alphabet.length)] }
+            .toString()
+    }
+
     /** `wfdctl` exit codes. See the header comment in wfdctl.c: "sent" is not "configured". */
     private const val WFDCTL_OK = 0
     private const val WFDCTL_REJECTED = 1
@@ -71,14 +89,29 @@ object WfdRootHelper {
     fun advertisementStatus(): AdvertisementStatus = lastAdvertisementStatus
 
     /**
+     * WFD Device Information field, laid out per the Wi-Fi Display spec's 16-bit definition:
+     *
+     *   0x00001  bit 0      Session Available
+     *   0x00000  bits 1-2   Preferred HTP mode 0 = sink only
+     *   0x00070  bits 4-6   Supported HTP modes: 1024x768 | 1280x720 | 1920x1080
+     *   0x00080  bit 7      Supports U-APSD
+     *   0x00C00  bits 10-11 Supported video capability 3 = 1080p30 / 720p60
+     *
+     * Advertising no HTP mode and no video capability is what makes several Sources list the sink
+     * but refuse to open a session against it, so the full set is declared. Preferred HTP mode
+     * stays 0 (sink only); 2 (both) made the device disappear from some Sources' lists.
+     */
+    private const val WFD_DEVICE_INFO = 0xCF1
+
+    /**
      * WFD Device Information subelement value (id 0 is supplied separately to WFD_SUBELEM_SET).
      * 0006 = six-byte payload length
-     * 0011 = Primary Sink + Session Available
+     * 0cf1 = WFD_DEVICE_INFO formatted as two bytes, see above
      * 1c44 = RTSP control port 7236
      * 0032 = 50 Mbps maximum throughput
      */
     internal fun subelemHex(controlPort: Int = 7236, maxThroughputMbps: Int = 50): String =
-        "0006" + "0011" + "%04x".format(controlPort.coerceIn(0, 0xffff)) +
+        "0006" + "%04x".format(WFD_DEVICE_INFO) + "%04x".format(controlPort.coerceIn(0, 0xffff)) +
             "%04x".format(maxThroughputMbps.coerceIn(0, 0xffff))
 
     internal fun parsePeerControlPort(output: String): Int? {
@@ -325,13 +358,18 @@ object WfdRootHelper {
     @Volatile
     private var lastGroupOwnerIntentConfigured = false
 
+    @Volatile
+    private var lastGroupOwnerIntentReadback: Int? = null
+
     /**
      * Raise the supplicant's Group Owner intent to the maximum. The WFD spec makes the Sink the
      * Group Owner; a supplicant left at the default intent loses the GO negotiation against an
      * Android Source, which asks for the lowest intent, and the session never comes up.
      *
-     * Returns true only when the command was acknowledged; an unconfirmed reply is reported as
-     * false so the caller can surface it instead of assuming the sink will win the negotiation.
+     * Returns true only when the intent is actually in force — acknowledged, or acknowledged with
+     * a read-back that could not be read. A read-back reporting a different value, or an
+     * unconfirmed reply, is reported as false so the caller can surface it instead of assuming
+     * the sink will win the negotiation.
      */
     fun configureGroupOwnerIntent(context: Context): Boolean {
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -356,28 +394,148 @@ object WfdRootHelper {
         }
 
         var acknowledged = false
+        var readBack: Int? = null
         for (socketPath in sockets) {
             val exit = runAsRoot("${binaryPath} $socketPath \"P2P_SET go_int $GO_OWNER_INTENT\"").exitCode
             when (exit) {
                 WFDCTL_OK -> {
                     acknowledged = true
-                    Timber.i("WFD: group owner intent set to $GO_OWNER_INTENT via $socketPath")
+                    readBack = groupOwnerIntentReadback(binaryPath, socketPath)
+                    if (readBack == GO_OWNER_INTENT) {
+                        Timber.i("WFD: group owner intent confirmed at $GO_OWNER_INTENT via $socketPath")
+                    } else {
+                        Timber.w("WFD: $socketPath accepted P2P_SET go_int but read-back reports $readBack")
+                    }
                 }
                 WFDCTL_UNCONFIRMED -> Timber.w("WFD: P2P_SET go_int sent to $socketPath but never acknowledged")
                 else -> Timber.w("WFD: $socketPath rejected P2P_SET go_int")
             }
-            if (acknowledged) break
+            if (readBack == GO_OWNER_INTENT) break
         }
 
         lastGroupOwnerIntentConfigured = acknowledged
-        if (!acknowledged) {
+        lastGroupOwnerIntentReadback = readBack
+        // A silence on P2P_GET is not proof the intent is wrong, so an acknowledged set with an
+        // unreadable probe still counts — but a read-back that reports a different value does not.
+        val effective = acknowledged && (readBack == null || readBack == GO_OWNER_INTENT)
+        if (!effective) {
             Timber.w(
-                "WFD: group owner intent not set; if the Source still does not see this device, run " +
-                    "\"P2P_SET go_int $GO_OWNER_INTENT\" manually on p2p-dev-wlan0 or add group_owner_intent=$GO_OWNER_INTENT " +
-                    "to the supplicant configuration."
+                "WFD: group owner intent not established (acknowledged=$acknowledged readback=$readBack); " +
+                    "the sink cannot win GO negotiation and the session will never come up. Run " +
+                    "\"P2P_SET go_int $GO_OWNER_INTENT\" manually on p2p-dev-wlan0 or add " +
+                    "group_owner_intent=$GO_OWNER_INTENT to the supplicant configuration."
             )
         }
-        return acknowledged
+        return effective
+    }
+
+    /**
+     * Parse the intent out of a P2P_GET reply. Stock supplicants print it as
+     * `group_owner_intent: 15`, some vendor builds as `go_int=15`, so both separators are accepted
+     * — accepting only one is how a read-back that always came back null went unnoticed.
+     */
+    internal fun parseGroupOwnerIntent(output: String): Int? =
+        Regex("(?mi)^\\s*(?:group_owner_intent|go_int)\\s*[:=]\\s*(\\d+)")
+            .findAll(output)
+            .lastOrNull()
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.toIntOrNull()
+
+    /** Read the intent the supplicant is actually using. null means the probe produced nothing. */
+    private fun groupOwnerIntentReadback(binaryPath: String, socketPath: String): Int? =
+        runAsRootOutput("${binaryPath} $socketPath \"P2P_GET\"")
+            ?.let { parseGroupOwnerIntent(it) }
+
+    /** True when a group interface is present, i.e. this device is currently a Group Owner. */
+    internal fun groupInterfaceExists(): Boolean =
+        runAsRoot("test -e /sys/class/net/p2p0").exitCode == 0 ||
+            existingControlSockets().any { kindOf(it) == SocketKind.GROUP_IFACE }
+
+    /**
+     * Poll for a group interface. `GROUP_FORMATION` is handled on a worker thread, so the socket
+     * reply can land before `p2p0` is up; waiting once on the first attempt is not enough.
+     */
+    private fun waitForGroupInterface(timeoutMs: Long): Boolean {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        while (SystemClock.elapsedRealtime() < deadline) {
+            if (groupInterfaceExists()) return true
+            runCatching { Thread.sleep(250L) }
+        }
+        return groupInterfaceExists()
+    }
+
+    @Volatile
+    private var lastGroupFormationDetail = "not attempted"
+
+    /** Last root group-formation outcome, for logging and the diagnostics page. */
+    fun groupFormationDetail(): String = lastGroupFormationDetail
+
+    /**
+     * Form the P2P group through wpa_supplicant when the framework will not. The framework's
+     * createGroup() is the normal path but fails outright on many vendor builds, and a Miracast sink
+     * that never becomes the Group Owner has no group to carry its WFD beacon in, so a Source lists
+     * the device and then cannot complete the connection against it. GROUP_FORMATION creates the
+     * group with this device as owner; Sources then attach as P2P clients.
+     *
+     * Idempotent by design: an existing group is left alone, because tearing it down would drop any
+     * Source already attached to it.
+     */
+    fun formSinkGroup(
+        context: Context,
+        ssid: String = SINK_GROUP_SSID,
+        passphrase: String = sinkGroupPassphrase
+    ): Boolean {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            val appContext = context.applicationContext
+            Thread({
+                runCatching { formSinkGroup(appContext, ssid, passphrase) }
+                    .onFailure { Timber.w(it, "WFD: root group formation failed") }
+            }, "wfd-group-formation").apply { isDaemon = true; start() }
+            return false
+        }
+
+        if (groupInterfaceExists()) {
+            lastGroupFormationDetail = "group already present"
+            return true
+        }
+
+        val binaryPath = helperBinary(context)
+        if (binaryPath == null) {
+            lastGroupFormationDetail = "$BINARY_NAME missing"
+            Timber.w("WFD: helper binary unavailable, so no group can be formed as Group Owner")
+            return false
+        }
+
+        val sockets = existingControlSockets().filter { kindOf(it) == SocketKind.P2P_DEV }
+        if (sockets.isEmpty()) {
+            lastGroupFormationDetail = "no p2p-dev control socket"
+            Timber.w("WFD: no p2p-dev control socket, so no group can be formed as Group Owner")
+            return false
+        }
+
+        for (socketPath in sockets) {
+            // An unconfirmed reply is worth retrying against the interface list, because the group
+            // may still have been created; the group interface is the proof, not the exit code.
+            val exit = runAsRoot(
+                "$binaryPath $socketPath \"GROUP_FORMATION '$ssid' '$passphrase'\""
+            ).exitCode
+            Timber.d("WFD: GROUP_FORMATION via $socketPath exit=$exit")
+            if (exit == WFDCTL_OK || exit == WFDCTL_UNCONFIRMED) {
+                if (waitForGroupInterface(8_000L)) {
+                    lastGroupFormationDetail = "formed via ${socketPath.substringAfterLast('/')}"
+                    Timber.i("WFD: P2P group formed through $socketPath; this device is now the Group Owner")
+                    return true
+                }
+                Timber.w("WFD: GROUP_FORMATION on $socketPath was accepted but no group interface appeared")
+            } else {
+                Timber.w("WFD: $socketPath rejected GROUP_FORMATION")
+            }
+        }
+
+        lastGroupFormationDetail = "rejected on every p2p-dev socket"
+        Timber.w("WFD: no supplicant interface accepted GROUP_FORMATION")
+        return false
     }
 
     fun stopAdvertising(context: Context): Boolean {
@@ -435,6 +593,8 @@ object WfdRootHelper {
         out["lastAdvertisementSocket"] = advertisementStatus().socketPath.orEmpty()
         out["lastVerified"] = advertisementStatus().verified.toString()
         out["groupOwnerIntentConfigured"] = lastGroupOwnerIntentConfigured.toString()
+        out["groupOwnerIntentReadback"] = (lastGroupOwnerIntentReadback ?: "unread").toString()
+        out["groupFormation"] = lastGroupFormationDetail
 
         if (binaryPath != null) {
             val firstSocket = sockets.firstOrNull()
@@ -447,7 +607,11 @@ object WfdRootHelper {
             out["wfdSupport"] = wpaSupplicantWfdSupport()
         }
         out["groupInterface"] = runAsRootOutput("ip -4 addr show p2p0").orEmpty().ifBlank {
-            "p2p0 does not exist — this device is not a Group Owner, so sources cannot find it"
+            if (runAsRoot("test -e /sys/class/net/p2p0").success) {
+                "p2p0 exists but has no IPv4 address yet — the group is still coming up"
+            } else {
+                "p2p0 does not exist — this device is not a Group Owner, so sources cannot find it"
+            }
         }
         out["selinux"] = runAsRootOutput("getenforce").orEmpty()
         out["wifiDisplaySetting"] = runAsRootOutput("settings get global wifi_display_on").orEmpty()
@@ -575,17 +739,40 @@ object WfdRootHelper {
         return found
     }
 
-    /** Periodic re-advertisement: supplicant restarts and vendor scans silently clear WFD state. */
+    /**
+     * Periodic re-advertisement: supplicant restarts and vendor scans silently clear WFD state,
+     * and a group that drops after a Source leaves would otherwise leave the sink reachable by
+     * nobody. Re-formation is off until [setKeepAliveGroupFormation] is called, because the
+     * framework owns the group until it proves unable to create one — forming it first here would
+     * steal the attempt and mask a real framework failure.
+     */
     @Volatile private var keepAliveRunning = false
     @Volatile private var keepAliveThread: Thread? = null
+    @Volatile private var keepAliveReFormGroup = false
+
+    /** Switch the keep-alive's group re-formation on or off. */
+    fun setKeepAliveGroupFormation(enabled: Boolean) {
+        keepAliveReFormGroup = enabled
+    }
 
     fun startKeepAlive(context: Context, periodMs: Long = 45_000L) {
         if (keepAliveRunning) return
         keepAliveRunning = true
+        keepAliveReFormGroup = false
         val appContext = context.applicationContext
         keepAliveThread = Thread({
             while (keepAliveRunning) {
-                runCatching { advertiseSink(appContext) }
+                // The intent is set once at startup and silently resets, and nothing else
+                // re-asserts it — so it rides along here, or the sink loses GO negotiation
+                // mid-session.
+                runCatching { configureGroupOwnerIntent(appContext) }
+                // A group that has just come up carries no WFD element in its beacon yet, so the
+                // injection has to be forced — the 4 s throttle would otherwise leave p2p0 bare.
+                val hadGroup = groupInterfaceExists()
+                if (keepAliveReFormGroup) {
+                    runCatching { formSinkGroup(appContext) }
+                }
+                runCatching { advertiseSink(appContext, force = !hadGroup) }
                 var sleptMs = 0L
                 while (keepAliveRunning && sleptMs < periodMs) {
                     Thread.sleep(1_000L)
@@ -597,6 +784,7 @@ object WfdRootHelper {
 
     fun stopKeepAlive() {
         keepAliveRunning = false
+        keepAliveReFormGroup = false
         keepAliveThread = null
     }
 

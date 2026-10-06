@@ -197,6 +197,8 @@ class WifiDirectManager(
                 if (!isStarted) return@requestGroupInfo
                 if (existing != null) {
                     Timber.i("P2P group already exists: ${existing.networkName}; sinkIsOwner=${existing.isGroupOwner}")
+                    // Someone already owns the group, so the keep-alive should not create another.
+                    WfdRootHelper.setKeepAliveGroupFormation(false)
                     onGroupReady(existing)
                 } else {
                     createSinkGroup()
@@ -222,6 +224,8 @@ class WifiDirectManager(
                 override fun onSuccess() {
                     if (!isStarted) return
                     sinkGroupAttempted = true
+                    // The framework owns the group, so the keep-alive must not fight it.
+                    WfdRootHelper.setKeepAliveGroupFormation(false)
                     Timber.i("Sink Group Owner formed; re-injecting the WFD IE into the G/O beacon")
                     WfdRootHelper.refreshAdvertisingAsync(appContext, force = true)
                     p2p.requestGroupInfo(ch) { group -> if (group != null) onGroupReady(group) }
@@ -235,6 +239,11 @@ class WifiDirectManager(
                             sinkGroupAttempted = true
                             RuntimeStateMiracast.report("SINK_GROUP_FAILED_${reasonText(reason)}")
                             Timber.w("Sink createGroup failed: ${reasonText(reason)}")
+                            // The framework path is not the only one, and it fails outright on many
+                            // vendor builds. Root can create the group through wpa_supplicant
+                            // regardless, which is the whole point: without a group there is no
+                            // G/O beacon to carry the WFD IE in at all.
+                            scheduleFallbackGroupFormation()
                         }
                     }
                 }
@@ -243,10 +252,52 @@ class WifiDirectManager(
             sinkGroupAttempted = true
             RuntimeStateMiracast.report("SINK_GROUP_PERMISSION_DENIED")
             Timber.w("createGroup denied; grant NEARBY_WIFI_DEVICES so the sink can become Group Owner")
+            scheduleFallbackGroupFormation()
         } catch (e: Exception) {
             sinkGroupAttempted = true
             RuntimeStateMiracast.report("SINK_GROUP_FAILED")
             Timber.w(e, "Unable to create the sink P2P group")
+            scheduleFallbackGroupFormation()
+        }
+    }
+
+    /**
+     * Root work must not run on the main thread — a hung `su` would freeze the UI — and the result
+     * is only meaningful once the attempt has actually finished, so it is scheduled with a delay
+     * and then handed to a worker.
+     */
+    private fun scheduleFallbackGroupFormation() {
+        mainHandler.postDelayed({
+            if (!isStarted) return@postDelayed
+            Thread({ formSinkGroupFallback() }, "wfd-fallback-group")
+                .apply { isDaemon = true; start() }
+        }, 500L)
+    }
+
+    /**
+     * Root-level group formation, reached only when the framework refuses to create one. On success
+     * the WFD IE is re-injected immediately — it has to land in the G/O beacon, not just in
+     * p2p-dev-*, or a Source still sees nothing to connect to. Whichever way it goes, the
+     * keep-alive takes ownership of re-forming a dropped group from here on.
+     */
+    private fun formSinkGroupFallback() {
+        val formed = runCatching { WfdRootHelper.formSinkGroup(appContext) }
+            .onFailure { Timber.w(it, "Root group formation threw") }
+            .getOrDefault(false)
+        if (!isStarted) return
+
+        WfdRootHelper.setKeepAliveGroupFormation(true)
+        RuntimeStateMiracast.report(if (formed) "SINK_GROUP_FORMED_ROOT" else "SINK_GROUP_FAILED")
+        Timber.i(
+            "Miracast sink group ${if (formed) "formed through wpa_supplicant" else "not formed"} " +
+                "(${WfdRootHelper.groupFormationDetail()})"
+        )
+        if (formed) {
+            WfdRootHelper.refreshAdvertisingAsync(appContext, force = true)
+            p2pManager()?.let { p2p ->
+                val ch = channel ?: return@let
+                runCatching { p2p.requestGroupInfo(ch) { group -> if (group != null) onGroupReady(group) } }
+            }
         }
     }
 

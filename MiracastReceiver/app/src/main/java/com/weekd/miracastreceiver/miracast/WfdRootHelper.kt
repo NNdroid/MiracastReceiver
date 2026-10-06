@@ -103,7 +103,7 @@ object WfdRootHelper {
     }
 
     /**
-     * Resolve the wfdctl helper path. The helper is packaged as `lib/arm*/libwfdctl.so` so it
+     * Resolve the wfdctl helper path. The helper is packaged as `lib/<abi>/libwfdctl.so` so it
      * travels with the APK, but on-device native-lib extraction is disabled on many builds:
      * `applicationInfo.nativeLibraryDir` then points at a directory that holds nothing, and the
      * helper has to be unpacked from the APK ourselves.
@@ -128,7 +128,7 @@ object WfdRootHelper {
         val dest = File(File(appContext.filesDir, "wfdctl"), BINARY_NAME)
 
         val extractedPath = runCatching {
-            ZipFile(apk.absolutePath).use { zip ->
+            ZipFile(apk).use { zip ->
                 val entry = zip.getEntry(entryName) ?: return@runCatching null
                 val directory = dest.parentFile ?: return@runCatching null
                 if (!directory.exists() && !directory.mkdirs()) return@runCatching null

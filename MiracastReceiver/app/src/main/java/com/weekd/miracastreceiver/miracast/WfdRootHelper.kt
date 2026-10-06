@@ -11,21 +11,32 @@ object WfdRootHelper {
 
     private const val BINARY_NAME = "libwfdctl.so"
     private const val ADVERTISE_THROTTLE_MS = 4_000L
+    private const val GO_OWNER_INTENT = 15
+
+    /** `wfdctl` exit codes. See the header comment in wfdctl.c: "sent" is not "configured". */
+    private const val WFDCTL_OK = 0
+    private const val WFDCTL_REJECTED = 1
+    private const val WFDCTL_UNCONFIRMED = 2
+
+    private enum class SocketKind { P2P_DEV, GROUP_IFACE, STA_FALLBACK }
 
     private val advertiseLock = Any()
     @Volatile private var advertiseInProgress = false
     @Volatile private var lastSuccessfulAdvertiseAt = 0L
 
     /**
-     * Prefer the global P2P-device/STA control interfaces. `p2p0` is commonly only a temporary
-     * group interface; sending WFD_SUBELEM_SET there can return FAIL while the real device socket
-     * (`p2p-dev-wlan0` or `wlan0`) would have accepted it.
+     * `p2p-dev-*` is the only interface type on which `WFD_SUBELEM_SET` can produce a P2P
+     * advertisement, so it is tried first. `wlan*` (STA) and `p2p*` (temporary group) are kept as
+     * last resorts on vendor supplicants that route the command differently — but success there is
+     * recorded as unverified, because a WFD IE set on an STA interface never reaches the air.
      */
     private val CTRL_SOCKET_PATHS = listOf(
         "/data/vendor/wifi/wpa/sockets/p2p-dev-wlan0",
         "/data/vendor/wifi/wpa/sockets/wlan0",
         "/data/vendor/wifi/wpa/sockets/p2p-dev-wlan1",
         "/data/vendor/wifi/wpa/sockets/wlan1",
+        "/data/vendor/wifi/wpa/sockets/p2p-dev-wlan2",
+        "/data/vendor/wifi/wpa/sockets/wlan2",
         "/data/misc/wifi/sockets/p2p-dev-wlan0",
         "/data/misc/wifi/sockets/wlan0",
         "/data/misc/wifi/sockets/p2p-dev-wlan1",
@@ -46,6 +57,8 @@ object WfdRootHelper {
         val coreWfdConfigured: Boolean = false,
         val extendedListenConfigured: Boolean = false,
         val verified: Boolean = false,
+        val groupOwnerIntentConfigured: Boolean = false,
+        val socketKind: String = "none",
         val detail: String = "not attempted"
     )
 
@@ -106,9 +119,9 @@ object WfdRootHelper {
     }
 
     /** Advertise this device as an available primary Miracast sink. */
-    fun advertiseSink(context: Context, controlPort: Int = 7236): Boolean {
+    fun advertiseSink(context: Context, controlPort: Int = 7236, force: Boolean = false): Boolean {
         if (Looper.myLooper() == Looper.getMainLooper()) {
-            refreshAdvertisingAsync(context, controlPort)
+            refreshAdvertisingAsync(context, controlPort, force)
             return true
         }
 
@@ -118,7 +131,7 @@ object WfdRootHelper {
                 Timber.d("WFD: advertisement refresh already in progress")
                 return lastAdvertisementStatus.success
             }
-            if (lastSuccessfulAdvertiseAt != 0L && now - lastSuccessfulAdvertiseAt < ADVERTISE_THROTTLE_MS) {
+            if (!force && lastSuccessfulAdvertiseAt != 0L && now - lastSuccessfulAdvertiseAt < ADVERTISE_THROTTLE_MS) {
                 Timber.d("WFD: advertisement still fresh via ${lastAdvertisementStatus.socketPath}")
                 return lastAdvertisementStatus.success
             }
@@ -142,81 +155,166 @@ object WfdRootHelper {
             }
 
             val payload = subelemHex(controlPort)
-            var lastDetail = "all control sockets rejected WFD commands"
+            val binaryPath = binary.absolutePath
 
-            for (socketPath in candidates) {
-                // Configure the two commands Xiaomi/HyperOS actually filters on first. They are
-                // considered the core success condition; optional discoverability commands are
-                // best-effort because several vendor supplicants do not implement P2P_SET.
-                val coreCmd = "${binary.absolutePath} $socketPath " +
-                    "\"SET wifi_display 1\" " +
-                    "\"WFD_SUBELEM_SET 0 $payload\""
-                if (!runAsRoot(coreCmd)) {
-                    lastDetail = "core WFD IE rejected on $socketPath"
-                    Timber.w("WFD: core advertisement rejected by $socketPath; trying next control interface")
-                    continue
+            // One attempt per socket, then pick the best. Scoring order matters: the correct
+            // interface type beats an acknowledged reply on the wrong one, and an acknowledged
+            // reply beats a bare "sent, no reply".
+            val attempts = candidates.map { socketPath ->
+                val kind = kindOf(socketPath)
+                val exit = runAsRoot(
+                    "$binaryPath $socketPath \"SET wifi_display 1\" \"WFD_SUBELEM_SET 0 $payload\""
+                ).exitCode
+                if (exit == WFDCTL_REJECTED) {
+                    Attempt(socketPath, kind, exit, verified = false, detail = "rejected")
+                } else {
+                    val readBack = verifyAdvertisement(binaryPath, socketPath, payload)
+                    if (readBack.replied && !readBack.ok) {
+                        Attempt(socketPath, kind, WFDCTL_REJECTED, verified = false, detail = readBack.detail)
+                    } else {
+                        Attempt(socketPath, kind, exit, verified = readBack.ok, detail = readBack.detail)
+                    }
                 }
+            }
 
-                // Read-back verification: wfdctl treats "sent, no reply" as sent, so a filtered or
-                // SELinux-blocked command would otherwise look successful while the sink stays
-                // invisible to Miracast sources. A real reply with wrong content fails this socket.
-                val verification = verifyAdvertisement(binary.absolutePath, socketPath, payload)
-                if (verification.replied && !verification.ok) {
-                    lastDetail = "verification failed on $socketPath (${verification.detail})"
-                    Timber.w("WFD: $socketPath accepted the command but read-back disagrees; trying next")
-                    continue
-                }
+            val chosen = attempts.minByOrNull { it.score() }
+                ?.takeIf { it.exit != WFDCTL_REJECTED }
 
+            attempts.forEach {
+                Timber.d("WFD: ${it.socketPath} kind=${it.kind} exit=${it.exit} ${it.detail}")
+            }
+
+            if (chosen == null) {
+                lastAdvertisementStatus = AdvertisementStatus(
+                    success = false,
+                    detail = "core advertisement rejected on every control socket: " +
+                        attempts.joinToString("; ") { "${it.socketPath.substringAfterLast('/')}(${it.kind})" }
+                )
+                Timber.w("WFD: no supplicant interface accepted the core WFD sink advertisement")
+                false
+            } else {
                 val discoverabilityOk = runAsRoot(
-                    "${binary.absolutePath} $socketPath \"P2P_SET discoverability 1\""
-                )
+                    "$binaryPath ${chosen.socketPath} \"P2P_SET discoverability 1\""
+                ).exitCode != WFDCTL_REJECTED
                 val listenOk = runAsRoot(
-                    "${binary.absolutePath} $socketPath \"P2P_EXT_LISTEN 500 1000\""
-                )
+                    "$binaryPath ${chosen.socketPath} \"P2P_EXT_LISTEN 500 1000\""
+                ).exitCode != WFDCTL_REJECTED
 
+                // Rejected commands are not throttled, so a broken path is retried on the next
+                // refresh instead of being remembered as done.
                 lastSuccessfulAdvertiseAt = SystemClock.elapsedRealtime()
                 lastAdvertisementStatus = AdvertisementStatus(
                     success = true,
-                    socketPath = socketPath,
+                    socketPath = chosen.socketPath,
                     coreWfdConfigured = true,
                     extendedListenConfigured = listenOk,
-                    verified = verification.ok,
+                    verified = chosen.verified,
+                    groupOwnerIntentConfigured = lastGroupOwnerIntentConfigured,
+                    socketKind = chosen.kind.name,
                     detail = buildString {
                         append("Primary Sink + Session Available + RTSP ")
                         append(controlPort)
+                        append("; socket=${chosen.kind}")
                         append("; discoverability=")
                         append(discoverabilityOk)
                         append("; extendedListen=")
                         append(listenOk)
                         append("; verified=")
-                        append(verification.ok)
-                        if (!verification.replied) append(" (supplicant reply blocked; assume accepted)")
+                        append(chosen.verified)
+                        if (chosen.exit == WFDCTL_UNCONFIRMED) {
+                            append(" (wpa_supplicant never replied; SELinux is likely blocking the response)")
+                        }
+                        if (chosen.kind != SocketKind.P2P_DEV) {
+                            append("; NOT on p2p-dev: WFD IE here cannot become a P2P advertisement")
+                        }
                     }
                 )
                 Timber.i(
-                    "WFD: primary sink advertised via $socketPath; advertisedRtsp=$controlPort " +
-                        "discoverability=$discoverabilityOk extended-listen=$listenOk verified=${verification.ok}"
+                    "WFD: primary sink advertised via ${chosen.socketPath}; advertisedRtsp=$controlPort " +
+                        "discoverability=$discoverabilityOk extended-listen=$listenOk verified=${chosen.verified}"
                 )
-                return true
+                if (chosen.kind != SocketKind.P2P_DEV) {
+                    Timber.w(
+                        "WFD: advertisement went to a ${chosen.kind} interface; a P2P source will not " +
+                            "see this device. Check that p2p-dev-wlan0 exists (Wi-Fi Direct must be initialized first)."
+                    )
+                }
+                true
             }
-
-            lastAdvertisementStatus = AdvertisementStatus(false, detail = lastDetail)
-            Timber.w("WFD: no supplicant interface accepted the core WFD sink advertisement")
-            false
         } finally {
-            advertiseInProgress = false
+            synchronized(advertiseLock) {
+                advertiseInProgress = false
+                advertiseLock.notifyAll()
+            }
         }
     }
 
-    fun refreshAdvertisingAsync(context: Context, controlPort: Int = 7236) {
+    fun refreshAdvertisingAsync(context: Context, controlPort: Int = 7236, force: Boolean = false) {
         val appContext = context.applicationContext
         Thread({
-            runCatching { advertiseSink(appContext, controlPort) }
+            runCatching { advertiseSink(appContext, controlPort, force) }
                 .onFailure {
                     lastAdvertisementStatus = AdvertisementStatus(false, detail = it.message ?: "advertisement exception")
                     Timber.w(it, "WFD: asynchronous advertisement refresh failed")
                 }
         }, "wfd-advertise").apply { isDaemon = true }.start()
+    }
+
+    @Volatile
+    private var lastGroupOwnerIntentConfigured = false
+
+    /**
+     * Raise the supplicant's Group Owner intent to the maximum. The WFD spec makes the Sink the
+     * Group Owner; a supplicant left at the default intent loses the GO negotiation against an
+     * Android Source, which asks for the lowest intent, and the session never comes up.
+     *
+     * Returns true only when the command was acknowledged; an unconfirmed reply is reported as
+     * false so the caller can surface it instead of assuming the sink will win the negotiation.
+     */
+    fun configureGroupOwnerIntent(context: Context): Boolean {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            val appContext = context.applicationContext
+            Thread({ lastGroupOwnerIntentConfigured = configureGroupOwnerIntent(appContext) }, "wfd-go-intent")
+                .apply { isDaemon = true }.start()
+            return true
+        }
+
+        val binary = File(context.applicationContext.applicationInfo.nativeLibraryDir, BINARY_NAME)
+        if (!binary.exists()) {
+            lastGroupOwnerIntentConfigured = false
+            return false
+        }
+
+        val sockets = existingControlSockets().filter { kindOf(it) == SocketKind.P2P_DEV }
+        if (sockets.isEmpty()) {
+            lastGroupOwnerIntentConfigured = false
+            Timber.w("WFD: no p2p-dev control socket, group owner intent not set")
+            return false
+        }
+
+        var acknowledged = false
+        for (socketPath in sockets) {
+            val exit = runAsRoot("${binary.absolutePath} $socketPath \"P2P_SET go_int $GO_OWNER_INTENT\"").exitCode
+            when (exit) {
+                WFDCTL_OK -> {
+                    acknowledged = true
+                    Timber.i("WFD: group owner intent set to $GO_OWNER_INTENT via $socketPath")
+                }
+                WFDCTL_UNCONFIRMED -> Timber.w("WFD: P2P_SET go_int sent to $socketPath but never acknowledged")
+                else -> Timber.w("WFD: $socketPath rejected P2P_SET go_int")
+            }
+            if (acknowledged) break
+        }
+
+        lastGroupOwnerIntentConfigured = acknowledged
+        if (!acknowledged) {
+            Timber.w(
+                "WFD: group owner intent not set; if the Source still does not see this device, run " +
+                    "\"P2P_SET go_int $GO_OWNER_INTENT\" manually on p2p-dev-wlan0 or add group_owner_intent=$GO_OWNER_INTENT " +
+                    "to the supplicant configuration."
+            )
+        }
+        return acknowledged
     }
 
     fun stopAdvertising(context: Context): Boolean {
@@ -228,36 +326,155 @@ object WfdRootHelper {
         synchronized(advertiseLock) {
             lastSuccessfulAdvertiseAt = 0L
         }
-        lastAdvertisementStatus = AdvertisementStatus(false, detail = "stopped")
+        // Wait for an in-flight advertisement to finish, otherwise it would re-inject the WFD IE
+        // straight after it is cleared and the sink would keep being discoverable after shutdown.
+        waitForAdvertiseIdle()
+        lastAdvertisementStatus = AdvertisementStatus(success = false, detail = "stopped")
+        lastGroupOwnerIntentConfigured = false
 
-        val binary = File(context.applicationInfo.nativeLibraryDir, BINARY_NAME)
+        val binary = File(context.applicationContext.applicationInfo.nativeLibraryDir, BINARY_NAME)
         if (!binary.exists()) return false
         var sent = false
         existingControlSockets().forEach { socketPath ->
             if (runAsRoot(
                     "${binary.absolutePath} $socketPath " +
                         "\"P2P_EXT_LISTEN\" \"SET wifi_display 0\""
-                )
+                ).exitCode != WFDCTL_REJECTED
             ) sent = true
         }
         return sent
     }
 
-    fun isRootAvailable(): Boolean = runAsRoot("id")
+    fun isRootAvailable(): Boolean = runAsRoot("id").success
+
+    /**
+     * Live state of the advertisement path, for the WebUI diagnostics page. Every entry is a real
+     * command and its output, so a misconfigured sink is visible without a phone in hand.
+     * Synchronous — it spawns several `su` processes, so call it off the main thread.
+     */
+    fun diagnostics(context: Context): Map<String, String> {
+        val out = HashMap<String, String>()
+        val appContext = context.applicationContext
+        out["rootAvailable"] = isRootAvailable().toString()
+        val binary = File(appContext.applicationInfo.nativeLibraryDir, BINARY_NAME)
+        out["wfdctlBinary"] = if (binary.exists()) binary.absolutePath else "MISSING: $BINARY_NAME"
+        val sockets = existingControlSockets()
+        out["controlSockets"] = sockets.joinToString(", ") { "${it}[${kindOf(it)}]" }.ifEmpty { "NONE FOUND" }
+        out["p2pDevSockets"] = sockets.filter { kindOf(it) == SocketKind.P2P_DEV }.joinToString(", ")
+            .ifEmpty { "NONE — Wi-Fi Direct not initialized, so WFD cannot be advertised" }
+        out["lastAdvertisement"] = advertisementStatus().detail
+        out["lastAdvertisementSocket"] = advertisementStatus().socketPath.orEmpty()
+        out["lastVerified"] = advertisementStatus().verified.toString()
+        out["groupOwnerIntentConfigured"] = lastGroupOwnerIntentConfigured.toString()
+
+        if (binary.exists()) {
+            val firstSocket = sockets.firstOrNull()
+            if (firstSocket != null) {
+                out["wfdSubelemReadback"] = runAsRootOutput(
+                    "${binary.absolutePath} $firstSocket \"WFD_SUBELEM_GET 0\""
+                ) ?: "no output"
+                out["p2pGet"] = runAsRootOutput("${binary.absolutePath} $firstSocket \"P2P_GET\"") ?: "no output"
+            }
+            out["wfdSupport"] = wpaSupplicantWfdSupport()
+        }
+        out["groupInterface"] = runAsRootOutput("ip -4 addr show p2p0").orEmpty().ifBlank {
+            "p2p0 does not exist — this device is not a Group Owner, so sources cannot find it"
+        }
+        out["selinux"] = runAsRootOutput("getenforce").orEmpty()
+        out["wifiDisplaySetting"] = runAsRootOutput("settings get global wifi_display_on").orEmpty()
+        return out
+    }
+
+    private class Attempt(
+        val socketPath: String,
+        val kind: SocketKind,
+        val exit: Int,
+        val verified: Boolean,
+        val detail: String
+    ) {
+        /**
+         * Lower is better. The interface type dominates the exit status: an acknowledged reply on
+         * the p2p device socket is worth more than a clean reply on the STA socket, which cannot
+         * advertise over the air at all. Rejected commands always rank worst, so `minByOrNull`
+         * only returns one of them when every socket refused.
+         */
+        fun score(): Int = when (kind) {
+            SocketKind.P2P_DEV -> when (exit) {
+                WFDCTL_OK -> if (verified) 0 else 2
+                WFDCTL_UNCONFIRMED -> 3
+                else -> 6
+            }
+            SocketKind.GROUP_IFACE -> when (exit) {
+                WFDCTL_OK -> 4
+                WFDCTL_UNCONFIRMED -> 5
+                else -> 7
+            }
+            SocketKind.STA_FALLBACK -> when (exit) {
+                WFDCTL_OK -> 5
+                WFDCTL_UNCONFIRMED -> 6
+                else -> 7
+            }
+        }
+    }
+
+    private fun kindOf(socketPath: String): SocketKind {
+        val name = socketPath.substringAfterLast('/')
+        return when {
+            name.startsWith("p2p-dev-") -> SocketKind.P2P_DEV
+            name.matches(Regex("p2p\\d+")) -> SocketKind.GROUP_IFACE
+            else -> SocketKind.STA_FALLBACK
+        }
+    }
+
+    /**
+     * Vendor builds put wpa_supplicant under /vendor/bin/hw, /vendor/bin, or /system/bin, so
+     * probe for the WFD symbols instead of trusting one hard-coded path. Without them no amount
+     * of injection will work.
+     */
+    /**
+     * Block briefly for an in-flight advertisement to finish. `advertiseSink` releases the lock
+     * from its `finally`, so this cannot deadlock.
+     */
+    private fun waitForAdvertiseIdle(timeoutMs: Long = 3_000L) {
+        val deadline = SystemClock.elapsedRealtime() + timeoutMs
+        synchronized(advertiseLock) {
+            while (advertiseInProgress && SystemClock.elapsedRealtime() < deadline) {
+                try {
+                    advertiseLock.wait(250L)
+                } catch (_: InterruptedException) {
+                    break
+                }
+            }
+        }
+    }
+
+    private fun wpaSupplicantWfdSupport(): String {
+        val binaries = listOf(
+            "/vendor/bin/hw/wpa_supplicant",
+            "/vendor/bin/wpa_supplicant",
+            "/system/bin/wpa_supplicant"
+        )
+        for (path in binaries) {
+            when (runAsRoot("grep -qa WFD_SUBELEM '$path'").exitCode) {
+                0 -> return "WFD support present in $path"
+                1 -> return "no WFD_SUBELEM symbol in $path — wpa_supplicant was built without Wi-Fi Display"
+            }
+            // 2 means the path does not exist; keep looking.
+        }
+        return "wpa_supplicant not found at any known path"
+    }
 
     private class Verification(val replied: Boolean, val ok: Boolean, val detail: String)
 
     /**
-     * Read the state back with WFD_SUBELEM_GET 0. Reply semantics:
-     * - hex containing the injected payload -> verified
-     * - hex with different content          -> the SET did not stick; socket rejected
-     * - FAIL / UNKNOWN / empty              -> vendor supplicant without WFD_SUBELEM_GET or a
-     *   blocked reply path; treated as unverified (same as the historic no-reply behavior) instead
-     *   of failing a working injection.
+     * Read the state back with WFD_SUBELEM_GET 0. Only a reply that actually contains the injected
+     * payload counts as verified; everything else — a different payload, FAIL, UNKNOWN, or silence —
+     * leaves `ok` false. Treating silence as success is what made this sink look configured while it
+     * was not, so the caller must read `verified` rather than `success`.
      */
     private fun verifyAdvertisement(binaryPath: String, socketPath: String, payload: String): Verification {
         val output = runAsRootOutput("$binaryPath $socketPath \"WFD_SUBELEM_GET 0\"")
-        if (output.isNullOrBlank()) return Verification(replied = false, ok = true, detail = "no-reply")
+        if (output.isNullOrBlank()) return Verification(replied = false, ok = false, detail = "read-back unavailable")
         val reply = output.lineSequence()
             .firstOrNull { it.contains("WFD_SUBELEM_GET") && it.contains("->") }
             ?.substringAfter("->")?.trim().orEmpty()
@@ -266,7 +483,7 @@ object WfdRootHelper {
             normalized.contains(payload) -> Verification(replied = true, ok = true, detail = "read-back ok")
             normalized.length >= 12 && normalized.all { it.isDigit() || it in 'a'..'f' } ->
                 Verification(replied = true, ok = false, detail = "subelem mismatch: $reply")
-            else -> Verification(replied = false, ok = true, detail = "get unsupported ($reply); assume accepted")
+            else -> Verification(replied = false, ok = false, detail = "read-back unsupported ($reply)")
         }
     }
 
@@ -276,9 +493,10 @@ object WfdRootHelper {
      * builds) are still discovered.
      */
     private fun existingControlSockets(): List<String> {
-        val found = CTRL_SOCKET_PATHS.filter { path ->
-            runAsRoot("test -S '$path' || test -e '$path'")
-        }.toMutableList()
+        val socketExists = { path: String ->
+            runAsRoot("test -S '$path' || test -e '$path'").success
+        }
+        val found = CTRL_SOCKET_PATHS.filter(socketExists).toMutableList()
         CTRL_SOCKET_DIRS.forEach { dir ->
             val listing = runAsRootOutput("ls -1 '$dir' 2>/dev/null") ?: return@forEach
             listing.lineSequence()
@@ -286,7 +504,7 @@ object WfdRootHelper {
                 .filter { it.startsWith("p2p") || it.startsWith("wlan") }
                 .forEach { name ->
                     val full = "$dir/$name"
-                    if (full !in found && runAsRoot("test -S '$full' || test -e '$full'")) found += full
+                    if (full !in found && socketExists(full)) found += full
                 }
         }
         return found
@@ -317,17 +535,21 @@ object WfdRootHelper {
         keepAliveThread = null
     }
 
-    private fun runAsRoot(command: String): Boolean = try {
+    private data class RootResult(val exitCode: Int, val output: String) {
+        val success: Boolean get() = exitCode == 0
+    }
+
+    private fun runAsRoot(command: String): RootResult = try {
         val process = ProcessBuilder("su", "-c", command)
             .redirectErrorStream(true)
             .start()
         val output = process.inputStream.bufferedReader().readText().trim()
         val exit = process.waitFor()
         if (output.isNotEmpty()) Timber.d("WFD root: $output")
-        exit == 0
+        RootResult(exit, output)
     } catch (e: Exception) {
         Timber.d("WFD root unavailable: ${e.message}")
-        false
+        RootResult(-1, e.message ?: "exception")
     }
 
     private fun runAsRootOutput(command: String): String? = try {

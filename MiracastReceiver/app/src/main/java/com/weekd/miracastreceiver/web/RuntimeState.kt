@@ -37,6 +37,8 @@ object RuntimeState {
     @Volatile var miracastState: String = "IDLE"
     @Volatile var miracastClient: String = ""
     @Volatile var miracastRtpPort: Int = 0
+    /** Advertisement pipeline token reported by WifiDirectManager; see /api/diagnostics. */
+    @Volatile var miracastAdvertisement: String = "NOT_ATTEMPTED"
 
     @Volatile var webrtcState: String = "IDLE"
     @Volatile var webrtcClient: String = ""

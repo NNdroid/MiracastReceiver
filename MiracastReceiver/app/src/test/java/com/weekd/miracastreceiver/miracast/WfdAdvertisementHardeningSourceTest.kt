@@ -1,5 +1,6 @@
 package com.weekd.miracastreceiver.miracast
 
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -28,10 +29,36 @@ class WfdAdvertisementHardeningSourceTest {
     }
 
     @Test
+    fun `native client classifies replies instead of pretending silence is success`() {
+        assertTrue(native.contains("CTRL_NO_REPLY"))
+        assertTrue(native.contains("is_rejected_reply"))
+        assertTrue(native.contains("strstr(p, \"failed\")"))
+        assertTrue(native.contains("strncmp(p, \"ERROR\", 5)"))
+        assertTrue(native.contains("verdict="))
+    }
+
+    @Test
     fun `advertiser retries sockets and treats WFD IE as core requirement`() {
-        assertTrue(helper.contains("for (socketPath in candidates)"))
+        assertTrue(helper.contains("candidates.map { socketPath ->"))
         assertTrue(helper.contains("WFD_SUBELEM_SET 0"))
         assertTrue(helper.contains("core advertisement rejected"))
         assertTrue(helper.contains("extendedListenConfigured"))
+    }
+
+    @Test
+    fun `read back must contain the injected payload to count as verified`() {
+        assertTrue(helper.contains("read-back ok"))
+        assertTrue(helper.contains("read-back unavailable"))
+        assertTrue(helper.contains("subelem mismatch"))
+        assertTrue(helper.contains("verified = readBack.ok"))
+        assertFalse(helper.contains("assume accepted"))
+    }
+
+    @Test
+    fun `per socket attempts are scored so the right interface wins`() {
+        assertTrue(helper.contains("class Attempt"))
+        assertTrue(helper.contains("fun score()"))
+        assertTrue(helper.contains("minByOrNull { it.score() }"))
+        assertTrue(helper.contains("takeIf { it.exit != WFDCTL_REJECTED }"))
     }
 }

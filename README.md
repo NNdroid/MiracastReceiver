@@ -237,15 +237,30 @@ The root injection path is hardened for the same range:
   candidates under `/data/vendor/wifi/wpa/sockets` and `/data/misc/wifi/sockets` are checked first,
   then both directories are scanned for sockets with vendor-specific interface names (common on
   Android 15–17 builds).
+- The WFD subelement is only written to a `p2p-dev-*` socket. That interface is what emits the P2P
+  advertisement; the STA socket (`wlan0`) cannot broadcast it and the group socket (`p2p0`) does not
+  exist until a group is formed, so per-socket attempts are scored by interface kind and the best
+  acknowledged result wins.
 - After `SET wifi_display 1` + `WFD_SUBELEM_SET 0 ...`, the state is read back
   (`GET wifi_display`, `WFD_SUBELEM_GET 0`). A socket whose read-back disagrees is skipped, and a
-  blocked supplicant reply is reported as *unverified* instead of silently successful.
+  blocked supplicant reply is reported as *unverified* instead of silently successful — the native
+  helper distinguishes "acknowledged" (0), "rejected" (1) and "sent, never answered" (2), because an
+  SELinux-blocked reply is indistinguishable from a missing command.
 - A periodic keep-alive (45 s) re-advertises the sink because supplicant restarts and vendor scans
   clear the injected WFD subelements.
 
-If injection fails everywhere, the WebUI `lastError` field and logcat (`WfdRootHelper`) show the
-reason; the usual causes are a supplicant built without `CONFIG_WIFI_DISPLAY` or an SELinux policy
-blocking the control socket.
+Injection alone is not enough for discovery: a Miracast source only lists P2P devices that advertise
+Group Owner capability together with the WFD information element, so the receiver has to become the
+Group Owner itself. The sink pipeline therefore runs in this order — initialize the P2pManager (which
+brings `p2p-dev-*` up), inject the WFD IE into `p2p-dev-*`, raise the Group Owner intent to 15, form
+the group as Group Owner, then re-inject the IE so it lands in the G/O beacon. Missing the group is
+why a correctly injected sink can still be invisible in the source's device list. On Android 13+ the
+`NEARBY_WIFI_DEVICES` permission is required for that discovery and group creation path.
+
+If injection fails everywhere, the WebUI diagnostics panel (`GET /api/diagnostics`, `miracast` field)
+and logcat (`WfdRootHelper`) show the reason, including whether the advertisement was verified by
+read-back and whether the Group Owner intent took effect; the usual causes are a supplicant built
+without `CONFIG_WIFI_DISPLAY` or an SELinux policy blocking the control socket.
 
 ## Android TV Remote Control Behavior
 

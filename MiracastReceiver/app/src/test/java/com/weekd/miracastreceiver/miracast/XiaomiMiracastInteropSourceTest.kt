@@ -12,14 +12,62 @@ class XiaomiMiracastInteropSourceTest {
     private val rootHelper = File("src/main/java/com/weekd/miracastreceiver/miracast/WfdRootHelper.kt").readText()
 
     @Test
-    fun sinkSupportsStandardAndroidGroupOwnerTopologyAndVendorFallback() {
-        assertTrue(wifiDirect.contains("prepareCompatibleTopology()"))
-        assertTrue(wifiDirect.contains("topology=dual-role-sink-go-compatible"))
+    fun sinkCreatesItsOwnGroupOwnerGroupOrItIsInvisibleToSources() {
+        // A Miracast source only lists P2P devices that advertise Group Owner capability together
+        // with the WFD information element. Reading the group state and never forming one leaves
+        // the sink undiscoverable, so group creation is the discovery path, not a side step.
+        assertTrue(wifiDirect.contains("ensureSinkGroup()"))
+        assertTrue(wifiDirect.contains("createSinkGroup()"))
+        assertTrue(wifiDirect.contains("p2p.createGroup(ch"))
+        assertTrue(wifiDirect.contains("P2P group already exists"))
+    }
+
+    @Test
+    fun sinkKeepsToleratingASourceOwnedGroupAtTheRtspLayer() {
         assertTrue(wifiDirect.contains("Sink is GO (standard Android Source-compatible)"))
         assertTrue(wifiDirect.contains("Source is GO"))
-        assertTrue(wifiDirect.contains("Preserving P2P group"))
-        assertFalse(wifiDirect.contains("Removing stale empty autonomous GO"))
-        assertFalse(wifiDirect.contains("source-go-preferred"))
+    }
+
+    @Test
+    fun advertisementIsInjectedIntoTheP2pDeviceInterfaceAfterInitialize() {
+        // WFD_SUBELEM_SET has no effect on the STA interface: it cannot emit a P2P advertisement.
+        // Injection therefore has to wait for initialize() to bring p2p-dev-* up.
+        assertTrue(wifiDirect.contains("SINK_PREPARE_DELAY_MS"))
+        assertTrue(wifiDirect.contains("WfdRootHelper.advertiseSink(appContext, force = true)"))
+        assertTrue(wifiDirect.contains("WfdRootHelper.configureGroupOwnerIntent(appContext)"))
+        assertTrue(wifiDirect.contains("prepareSink()"))
+    }
+
+    @Test
+    fun groupOwnerIntentIsRaisedSoTheSinkWinsGoNegotiation() {
+        assertTrue(rootHelper.contains("GO_OWNER_INTENT"))
+        assertTrue(rootHelper.contains("fun configureGroupOwnerIntent"))
+        assertTrue(rootHelper.contains("P2P_SET go_int"))
+        assertTrue(rootHelper.contains("groupOwnerIntentConfigured"))
+    }
+
+    @Test
+    fun advertisementSuccessIsReportedWithVerificationHonesty() {
+        assertTrue(rootHelper.contains("WFDCTL_OK"))
+        assertTrue(rootHelper.contains("WFDCTL_REJECTED"))
+        assertTrue(rootHelper.contains("WFDCTL_UNCONFIRMED"))
+        assertTrue(rootHelper.contains("fun kindOf("))
+        assertTrue(rootHelper.contains("P2P_DEV"))
+        assertTrue(rootHelper.contains("STA_FALLBACK"))
+        assertTrue(rootHelper.contains("GROUP_IFACE"))
+    }
+
+    @Test
+    fun p2pScanPermissionsAreCheckedBeforeGroupCreation() {
+        assertTrue(wifiDirect.contains("NEARBY_WIFI_DEVICES"))
+        assertTrue(wifiDirect.contains("fun p2pPermissionsGranted()"))
+        assertTrue(wifiDirect.contains("requestP2pPermissions()"))
+    }
+
+    @Test
+    fun sinkAdvertisementStateIsExposedSoFailureIsDiagnosable() {
+        assertTrue(wifiDirect.contains("RuntimeStateMiracast.report("))
+        assertTrue(rootHelper.contains("fun diagnostics(context: Context)"))
     }
 
     @Test
@@ -45,7 +93,15 @@ class XiaomiMiracastInteropSourceTest {
         assertTrue(rootHelper.contains("controlPort: Int = 7236"))
         assertTrue(rootHelper.contains("P2P_PEER FIRST"))
         assertTrue(rootHelper.contains("parsePeerControlPort"))
-        assertTrue(rootHelper.contains("fun advertiseSink(context: Context, controlPort: Int = 7236)"))
+        assertTrue(rootHelper.contains("fun advertiseSink(context: Context, controlPort: Int = 7236"))
+    }
+
+    @Test
+    fun advertisementIsClearedWhenTheReceiverStops() {
+        assertTrue(wifiDirect.contains("WfdRootHelper.stopAdvertising(appContext)"))
+        assertTrue(rootHelper.contains("fun stopAdvertising"))
+        assertTrue(rootHelper.contains("SET wifi_display 0"))
+        assertFalse(rootHelper.contains("\"assume accepted\""))
     }
 
     @Test

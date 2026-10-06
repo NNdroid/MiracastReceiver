@@ -1,9 +1,11 @@
 package com.weekd.miracastreceiver.miracast
 
+import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pGroup
 import android.net.wifi.p2p.WifiP2pManager
@@ -15,7 +17,22 @@ import androidx.core.content.ContextCompat
 import timber.log.Timber
 import java.lang.reflect.InvocationTargetException
 
-/** Wi-Fi Direct control plane for the Miracast sink. */
+/**
+ * Wi-Fi Direct control plane for the Miracast sink.
+ *
+ * A Miracast sink has to be the P2P Group Owner. The Source scans for G/O devices carrying the WFD
+ * information element and starts GO negotiation against the ones it finds; a sink that never forms
+ * a group therefore never advertises and stays invisible in the Source's device list, no matter how
+ * correct the RTSP side is. The ordering here follows that constraint:
+ *
+ *   1. initialize the P2pManager, which brings up the supplicant's `p2p-dev-*` interface
+ *   2. advertise the WFD IE into `p2p-dev-*` — `wlan0` cannot emit a P2P advertisement
+ *   3. raise the Group Owner intent to the maximum
+ *   4. form the group as Group Owner, then re-inject the IE so it lands in the G/O beacon
+ *
+ * Steps 2-4 are retried whenever the group comes back down. Step 2 used to run before step 1,
+ * which sent `WFD_SUBELEM_SET` to the STA interface and left the sink invisible.
+ */
 class WifiDirectManager(
     private val context: Context,
     private val deviceName: String
@@ -33,6 +50,9 @@ class WifiDirectManager(
          * as the hidden twin on 30–R. Trying both keeps every supported release covered.
          */
         val WFD_METHOD_CANDIDATES = listOf("setWfdInfo", "setWFDInfo")
+
+        /** P2P group interfaces need a moment after initialize() before they accept commands. */
+        val SINK_PREPARE_DELAY_MS = 750L
     }
 
     private var channel: WifiP2pManager.Channel? = null
@@ -40,6 +60,7 @@ class WifiDirectManager(
     private var isStarted = false
     private var frameworkStarted = false
     private var discoveryRetryCount = 0
+    private var sinkGroupAttempted = false
 
     var onDeviceConnected: ((WifiP2pDevice) -> Unit)? = null
     var onDeviceDisconnected: (() -> Unit)? = null
@@ -49,29 +70,33 @@ class WifiDirectManager(
         if (isStarted) return
         val p2p = manager ?: run {
             Timber.w("Wi-Fi Direct is unavailable; Miracast cannot be advertised")
+            RuntimeStateMiracast.report("WIFI_DIRECT_SERVICE_MISSING")
             return
         }
         isStarted = true
+        sinkGroupAttempted = false
         WfdSourceHint.clear()
 
         Thread({
-            val rootAdvertised = runCatching { WfdRootHelper.advertiseSink(appContext) }
-                .onFailure { Timber.w(it, "WFD root advertisement failed") }
-                .getOrDefault(false)
-            mainHandler.post {
-                if (isStarted) startFrameworkP2p(p2p, rootAdvertised)
+            // requestPermissions is @MainThread, so the permission probe happens here and the
+            // actual request on the main handler.
+            val granted = p2pPermissionsGranted()
+            if (isStarted) {
+                if (!granted) mainHandler.post { requestP2pPermissions() }
+                mainHandler.post { startFrameworkP2p(p2p) }
             }
         }, "wfd-prepare").apply { isDaemon = true }.start()
     }
 
-    private fun startFrameworkP2p(p2p: WifiP2pManager, rootAdvertised: Boolean) {
+    private fun startFrameworkP2p(p2p: WifiP2pManager) {
         if (!isStarted || frameworkStarted) return
         try {
             channel = p2p.initialize(appContext, Looper.getMainLooper()) {
                 Timber.w("Wi-Fi P2P channel disconnected; scheduling recovery")
                 frameworkStarted = false
                 channel = null
-                if (isStarted) mainHandler.postDelayed({ startFrameworkP2p(p2p, rootAdvertised) }, 1_000L)
+                sinkGroupAttempted = false
+                if (isStarted) mainHandler.postDelayed({ startFrameworkP2p(p2p) }, 1_000L)
             }
             if (channel == null) return
 
@@ -80,19 +105,118 @@ class WifiDirectManager(
             setWfdInfo()
             setMiracastMode(2, "SINK")
             registerLocalService()
-            prepareCompatibleTopology()
+            setDeviceName(deviceName)
+            RuntimeStateMiracast.report("P2P_INITIALIZED")
 
-            if (!rootAdvertised) WfdRootHelper.refreshAdvertisingAsync(appContext)
-            // Vendor supplicants (and framework P2P restarts on Android 12–17) can drop the
-            // injected WFD subelements; a slow periodic refresh keeps the sink discoverable.
-            WfdRootHelper.startKeepAlive(appContext)
-            Timber.i(
-                "Wi-Fi Direct started for Miracast (api=${Build.VERSION.SDK_INT}, " +
-                    "rootWfd=$rootAdvertised, topology=dual-role-sink-go-compatible)"
-            )
+            if (!p2pPermissionsGranted()) {
+                Timber.w(
+                    "P2P scan permissions missing on API ${Build.VERSION.SDK_INT}; group creation and " +
+                        "peer discovery will fail and the sink will stay invisible to sources"
+                )
+            }
+
+            // WFD injection and group formation both need the p2p-dev interface, which only exists
+            // after initialize().
+            mainHandler.postDelayed({ if (isStarted) prepareSink() }, SINK_PREPARE_DELAY_MS)
+            Timber.i("Wi-Fi Direct initialized for Miracast sink (api=${Build.VERSION.SDK_INT})")
         } catch (e: Exception) {
             frameworkStarted = false
+            RuntimeStateMiracast.report("P2P_INITIALIZE_FAILED")
             Timber.e(e, "Failed to start Wi-Fi Direct")
+        }
+    }
+
+    /**
+     * The part that makes this device show up in the Source's device list. Runs the root work off
+     * the main thread, then forms the Group Owner group on it.
+     */
+    private fun prepareSink() {
+        Thread({
+            val rootAdvertised = runCatching { WfdRootHelper.advertiseSink(appContext, force = true) }
+                .onFailure { Timber.w(it, "WFD root advertisement failed") }
+                .getOrDefault(false)
+            val goIntent = runCatching { WfdRootHelper.configureGroupOwnerIntent(appContext) }
+                .getOrDefault(false)
+            mainHandler.post {
+                if (!isStarted) return@post
+                WfdRootHelper.startKeepAlive(appContext)
+                RuntimeStateMiracast.report(
+                    "WFD_" + if (rootAdvertised && goIntent) "ADVERTISED"
+                    else if (rootAdvertised) "ADVERTISED_GO_INTENT_MISSING"
+                    else "ADVERTISE_FAILED"
+                )
+                Timber.i(
+                    "Miracast sink advertisement ready (rootWfd=$rootAdvertised goIntent=$goIntent, " +
+                        "verified=${WfdRootHelper.advertisementStatus().verified}, " +
+                        "socket=${WfdRootHelper.advertisementStatus().socketPath})"
+                )
+                ensureSinkGroup()
+            }
+        }, "wfd-advertise").apply { isDaemon = true }.start()
+    }
+
+    /**
+     * Reuse an existing group, or create one so this device becomes the Group Owner. Without this
+     * there is no p2p0, no G/O beacon, and no WFD advertisement on the air.
+     */
+    private fun ensureSinkGroup() {
+        val p2p = p2pManager() ?: return
+        val ch = channel ?: return
+        try {
+            p2p.requestGroupInfo(ch) { existing ->
+                if (!isStarted) return@requestGroupInfo
+                if (existing != null) {
+                    Timber.i("P2P group already exists: ${existing.networkName}; sinkIsOwner=${existing.isGroupOwner}")
+                    onGroupReady(existing)
+                } else {
+                    createSinkGroup()
+                }
+                WfdRootHelper.refreshAdvertisingAsync(appContext, force = true)
+                startPeerDiscovery()
+            }
+        } catch (e: SecurityException) {
+            Timber.w("Cannot inspect P2P topology; NEARBY_WIFI_DEVICES not granted on API 33+")
+            RuntimeStateMiracast.report("P2P_PERMISSION_DENIED")
+        } catch (e: Exception) {
+            Timber.w(e, "Unable to inspect P2P topology")
+            startPeerDiscovery()
+        }
+    }
+
+    private fun createSinkGroup() {
+        val p2p = p2pManager() ?: return
+        val ch = channel ?: return
+        Timber.i("Creating the P2P group so this device acts as the Miracast sink Group Owner")
+        try {
+            p2p.createGroup(ch, object : WifiP2pManager.ActionListener {
+                override fun onSuccess() {
+                    if (!isStarted) return
+                    sinkGroupAttempted = true
+                    Timber.i("Sink Group Owner formed; re-injecting the WFD IE into the G/O beacon")
+                    WfdRootHelper.refreshAdvertisingAsync(appContext, force = true)
+                    p2p.requestGroupInfo(ch) { group -> if (group != null) onGroupReady(group) }
+                }
+
+                override fun onFailure(reason: Int) {
+                    if (!isStarted) return
+                    when (reason) {
+                        WifiP2pManager.BUSY -> mainHandler.postDelayed({ if (isStarted) createSinkGroup() }, 1_500L)
+                        else -> {
+                            sinkGroupAttempted = true
+                            RuntimeStateMiracast.report("SINK_GROUP_FAILED_${reasonText(reason)}")
+                            Timber.w("Sink createGroup failed: ${reasonText(reason)}")
+                        }
+                    }
+                }
+            })
+        } catch (e: SecurityException) {
+            sinkGroupAttempted = true
+            RuntimeStateMiracast.report("SINK_GROUP_PERMISSION_DENIED")
+            Timber.w("createGroup denied; grant NEARBY_WIFI_DEVICES so the sink can become Group Owner")
+        } catch (e: Exception) {
+            sinkGroupAttempted = true
+            RuntimeStateMiracast.report("SINK_GROUP_FAILED")
+            Timber.w(e, "Unable to create the sink P2P group")
         }
     }
 
@@ -140,11 +264,11 @@ class WifiDirectManager(
             val listener = object : WifiP2pManager.ActionListener {
                 override fun onSuccess() {
                     Timber.i("WFD Info set through Android framework")
-                    WfdRootHelper.refreshAdvertisingAsync(appContext)
+                    WfdRootHelper.refreshAdvertisingAsync(appContext, force = true)
                 }
                 override fun onFailure(reason: Int) {
                     Timber.w("Framework setWFDInfo failed: ${reasonText(reason)}; using root fallback")
-                    WfdRootHelper.refreshAdvertisingAsync(appContext)
+                    WfdRootHelper.refreshAdvertisingAsync(appContext, force = true)
                 }
             }
             var lastFailure: Exception? = null
@@ -176,7 +300,6 @@ class WifiDirectManager(
             throw (lastFailure ?: IllegalStateException("no framework WFD setter available on API $api"))
         } catch (e: Exception) {
             Timber.i("Framework WFD API unavailable on API $api (expected for non-privileged apps): ${e.message}")
-            WfdRootHelper.refreshAdvertisingAsync(appContext)
         }
     }
 
@@ -189,43 +312,11 @@ class WifiDirectManager(
             .newInstance(1, 7236, 50)
     }
 
-    /**
-     * Preserve either valid P2P role. Android/AOSP Sources normally request the minimum GO intent,
-     * therefore the receiver becoming GO is a standard topology, not an error. Some vendor Sources
-     * still become GO, so the RTSP layer supports that topology as well.
-     */
-    private fun prepareCompatibleTopology() {
-        val p2p = p2pManager() ?: return
-        val ch = channel ?: return
-        try {
-            p2p.requestGroupInfo(ch) { existing ->
-                if (!isStarted) return@requestGroupInfo
-                if (existing == null) {
-                    Timber.i("P2P topology ready: accepting Sink-GO or Source-GO negotiation")
-                } else {
-                    Timber.i(
-                        "Preserving P2P group ${existing.networkName}; sinkIsOwner=${existing.isGroupOwner}; " +
-                            "clients=${existing.clientList.size}; both Miracast roles supported"
-                    )
-                    onGroupReady(existing)
-                }
-                WfdRootHelper.refreshAdvertisingAsync(appContext)
-                startPeerDiscovery()
-            }
-        } catch (e: SecurityException) {
-            Timber.w("Cannot query P2P group; missing nearby/location permission")
-            startPeerDiscovery()
-        } catch (e: Exception) {
-            Timber.w(e, "Unable to prepare compatible Miracast P2P topology")
-            startPeerDiscovery()
-        }
-    }
-
     private fun onGroupReady(group: WifiP2pGroup) {
         Timber.i("P2P group ready: ${group.networkName}; sinkIsOwner=${group.isGroupOwner}; clients=${group.clientList.size}")
         onGroupCreated?.invoke(group)
         setDeviceName(deviceName)
-        WfdRootHelper.refreshAdvertisingAsync(appContext)
+        WfdRootHelper.refreshAdvertisingAsync(appContext, force = true)
         group.clientList.forEach { rememberSourceDevice(it, "group-client") }
         group.clientList.firstOrNull()?.let { onDeviceConnected?.invoke(it) }
     }
@@ -248,6 +339,10 @@ class WifiDirectManager(
         port?.toInt()?.takeIf { it in 1..65535 }
     }.getOrNull()
 
+    /**
+     * The Source lists the sink under its P2P device name, so this has to happen before the
+     * advertisement is refreshed, not after a group is already up.
+     */
     private fun setDeviceName(name: String) {
         val p2p = p2pManager() ?: return
         val ch = channel ?: return
@@ -277,6 +372,7 @@ class WifiDirectManager(
     private fun startPeerDiscovery() {
         val p2p = p2pManager() ?: return
         val ch = channel ?: return
+        if (!p2pPermissionsGranted()) return
         try {
             p2p.discoverPeers(ch, object : WifiP2pManager.ActionListener {
                 override fun onSuccess() {
@@ -291,9 +387,35 @@ class WifiDirectManager(
                     }
                 }
             })
+        } catch (e: SecurityException) {
+            Timber.w("P2P discoverPeers denied; NEARBY_WIFI_DEVICES not granted")
         } catch (e: Exception) {
             Timber.w(e, "Unable to start P2P discovery")
         }
+    }
+
+    private fun p2pPermissionsGranted(): Boolean {
+        if (Build.VERSION.SDK_INT >= 33) {
+            return ContextCompat.checkSelfPermission(
+                appContext, Manifest.permission.NEARBY_WIFI_DEVICES
+            ) == PackageManager.PERMISSION_GRANTED
+        }
+        return ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+                PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun requestP2pPermissions() {
+        if (Build.VERSION.SDK_INT < 23) return
+        val requested = if (Build.VERSION.SDK_INT >= 33) {
+            arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
+        } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+        }
+        Timber.w("P2P scan permissions missing, requesting ${requested.joinToString()}")
+        runCatching { appContext.requestPermissions(requested, 1001) }
+            .onFailure { Timber.d(it, "Unable to request P2P permissions from the service") }
     }
 
     private fun registerReceiver() {
@@ -311,14 +433,14 @@ class WifiDirectManager(
                         val enabled = intent.getIntExtra(WifiP2pManager.EXTRA_WIFI_STATE, -1) == WifiP2pManager.WIFI_P2P_STATE_ENABLED
                         Timber.i("Wi-Fi P2P state: ${if (enabled) "ENABLED" else "DISABLED"}")
                         if (enabled && isStarted) {
-                            WfdRootHelper.refreshAdvertisingAsync(appContext)
-                            prepareCompatibleTopology()
+                            sinkGroupAttempted = false
+                            mainHandler.postDelayed({ if (isStarted) prepareSink() }, SINK_PREPARE_DELAY_MS)
                         }
                     }
                     WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION -> requestPeersForDiagnostics()
                     WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION -> refreshConnectionState()
                     WifiP2pManager.WIFI_P2P_THIS_DEVICE_CHANGED_ACTION -> if (isStarted) {
-                        WfdRootHelper.refreshAdvertisingAsync(appContext)
+                        WfdRootHelper.refreshAdvertisingAsync(appContext, force = true)
                     }
                 }
             }
@@ -357,8 +479,8 @@ class WifiDirectManager(
                     WfdSourceHint.clear()
                     onDeviceDisconnected?.invoke()
                     if (isStarted) {
-                        WfdRootHelper.refreshAdvertisingAsync(appContext)
-                        prepareCompatibleTopology()
+                        WfdRootHelper.refreshAdvertisingAsync(appContext, force = true)
+                        if (!sinkGroupAttempted) ensureSinkGroup()
                     }
                 }
             }
@@ -372,6 +494,7 @@ class WifiDirectManager(
         isStarted = false
         frameworkStarted = false
         discoveryRetryCount = 0
+        sinkGroupAttempted = false
         mainHandler.removeCallbacksAndMessages(null)
         setMiracastMode(0, "DISABLED")
 
@@ -386,6 +509,8 @@ class WifiDirectManager(
         receiver = null
         channel = null
         WfdRootHelper.stopKeepAlive()
+        WfdRootHelper.stopAdvertising(appContext)
+        RuntimeStateMiracast.report("STOPPED")
         Timber.i("Wi-Fi Direct stopped")
     }
 
@@ -402,5 +527,17 @@ class WifiDirectManager(
         WifiP2pManager.P2P_UNSUPPORTED -> "P2P_UNSUPPORTED"
         WifiP2pManager.BUSY -> "BUSY"
         else -> "UNKNOWN($reason)"
+    }
+}
+
+/**
+ * Minimal adapter so [WifiDirectManager] does not have to depend on the WebUI runtime state just to
+ * make its failure modes visible. The value is a stable, greppable token shown on the diagnostics
+ * page, which is the only way to tell "the sink is not advertising" apart from "it is and the
+ * Source is filtering it".
+ */
+private object RuntimeStateMiracast {
+    fun report(token: String) {
+        com.weekd.miracastreceiver.web.RuntimeState.miracastAdvertisement = token
     }
 }

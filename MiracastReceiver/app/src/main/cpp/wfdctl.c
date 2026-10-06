@@ -2,8 +2,15 @@
  * wfdctl —— wpa_supplicant control-interface client for injecting Wi-Fi Display sink state.
  *
  * Normal applications cannot call WifiP2pManager.setWFDInfo() on modern Android because it
- * requires signature-level CONFIGURE_WIFI_DISPLAY. On rooted Android TV devices this small
- * executable talks directly to the supplicant control socket.
+ * requires signature-level CONFIGURE_WIFI_DISPLAY. On rooted devices this small executable talks
+ * directly to the supplicant control socket.
+ *
+ * Exit codes are a contract with the caller — "sent" must never be read as "configured":
+ *   0  every command was acknowledged by wpa_supplicant
+ *   1  at least one command was explicitly rejected (unsupported, FAIL, parameter error)
+ *   2  nothing was rejected, but at least one command got no reply — usually SELinux refusing the
+ *      response packet, so the command reached the supplicant but confirmation never came back
+ *   3  usage error
  */
 #include <errno.h>
 #include <stdio.h>
@@ -15,6 +22,10 @@
 
 #define WIFI_UID 1010 /* AID_WIFI */
 #define REPLY_TIMEOUT_USEC 300000
+
+#define CTRL_OK        0
+#define CTRL_REJECTED  1
+#define CTRL_NO_REPLY  2
 
 static int ctrl_fd = -1;
 static char local_path[108];
@@ -66,10 +77,37 @@ static int ctrl_open(const char *server_path)
 }
 
 /*
+ * Every way wpa_supplicant says "no". A rejection that is not detected here becomes a silent
+ * no-op that the caller reports as success, which is exactly how an app ends up claiming "WFD
+ * sink advertised" while the Source still cannot see it.
+ *
+ * Notable ones:
+ *   FAIL                 - generic refusal
+ *   UNKNOWN COMMAND      - feature not compiled in, or sent on the wrong interface type
+ *   UNKNOWN              - abbreviated form of the above
+ *   ERROR                - used by some vendor builds instead of FAIL
+ *   WPA_NOT_IMPLEMENTED  - the command is outside the STA control interface
+ *   "<CMD> failed: -2"   - p2p_ctrl_wfd reports wpa_supplicant_wfd_elem_set() failure this way,
+ *                          which starts with the command name, not with FAIL
+ */
+static int is_rejected_reply(const char *p)
+{
+    if (strncmp(p, "FAIL", 4) == 0 ||
+        strncmp(p, "UNKNOWN COMMAND", 15) == 0 ||
+        strncmp(p, "UNKNOWN", 7) == 0 ||
+        strncmp(p, "ERROR", 5) == 0 ||
+        strncmp(p, "WPA_NOT_IMPLEMENTED", 19) == 0)
+        return 1;
+    if (strstr(p, "failed") != NULL)
+        return 1;
+    return 0;
+}
+
+/*
  * Send one command and briefly wait for a reply. Some SELinux policies allow the command to reach
- * wpa_supplicant but prevent the response from reaching the su-domain client. A missing reply is
- * therefore still treated as "sent". An explicit FAIL/UNKNOWN reply, however, must propagate as
- * failure; older builds incorrectly returned success even when supplicant rejected WFD commands.
+ * wpa_supplicant but prevent the response from reaching the su-domain client. That is reported as
+ * CTRL_NO_REPLY rather than CTRL_OK: the state is unconfirmed, and pretending otherwise is what
+ * makes a misconfigured sink look healthy in the logs. An explicit rejection is always a failure.
  */
 static int ctrl_request(const char *cmd)
 {
@@ -79,7 +117,7 @@ static int ctrl_request(const char *cmd)
 
     if (send(ctrl_fd, cmd, strlen(cmd), 0) < 0) {
         fprintf(stderr, "send(%s) failed: %s\n", cmd, strerror(errno));
-        return -1;
+        return CTRL_REJECTED;
     }
 
     tv.tv_sec = 0;
@@ -95,24 +133,20 @@ static int ctrl_request(const char *cmd)
         p = reply;
         while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
             p++;
-        if (strncmp(p, "FAIL", 4) == 0 ||
-            strncmp(p, "UNKNOWN COMMAND", 15) == 0 ||
-            strncmp(p, "UNKNOWN", 7) == 0) {
-            return -1;
-        }
-    } else {
-        printf("%s -> (sent, no reply)\n", cmd);
+        return is_rejected_reply(p) ? CTRL_REJECTED : CTRL_OK;
     }
-    return 0;
+
+    printf("%s -> (sent, no reply)\n", cmd);
+    return CTRL_NO_REPLY;
 }
 
 int main(int argc, char *argv[])
 {
-    int i, rc = 0;
+    int i, rc = CTRL_OK;
 
     if (argc < 3) {
         fprintf(stderr, "usage: %s <ctrl_socket> <command> [command...]\n", argv[0]);
-        return 2;
+        return 3;
     }
 
     if (ctrl_open(argv[1]) < 0) {
@@ -122,9 +156,15 @@ int main(int argc, char *argv[])
     }
 
     for (i = 2; i < argc; i++) {
-        if (ctrl_request(argv[i]) < 0)
-            rc = 1;
+        int res = ctrl_request(argv[i]);
+        if (res == CTRL_REJECTED)
+            rc = CTRL_REJECTED;
+        else if (rc == CTRL_OK)
+            rc = CTRL_NO_REPLY; /* "sent, unconfirmed" downgrades an otherwise clean run */
     }
+
+    printf("wfdctl: verdict=%s\n",
+           rc == CTRL_OK ? "ok" : rc == CTRL_REJECTED ? "rejected" : "unconfirmed");
 
     if (ctrl_fd >= 0)
         close(ctrl_fd);

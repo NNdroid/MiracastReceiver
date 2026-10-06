@@ -55,23 +55,31 @@ adb shell "su -c 'grep -ac WFD_SUBELEM /vendor/bin/hw/wpa_supplicant'"
 adb shell "su -c 'ls /data/misc/wifi/sockets/ /data/vendor/wifi/wpa/sockets/ 2>/dev/null'"
 ```
 
-应能看到 `p2p0`。新版本 Android 在 `/data/vendor/wifi/wpa/sockets/`，旧版本在 `/data/misc/wifi/sockets/`，应用会自动探测。
+**应用启动前这里是空的**：`p2p-dev-wlan0` 只有调用过 `WifiP2pManager.initialize()` 之后才出现，`p2p0` 则要等到投屏组建成。应用会自动探测两个目录（新版本 Android 在 `/data/vendor/wifi/wpa/sockets/`，旧版本在 `/data/misc/wifi/sockets/`）。
+
+真正需要的是 **`p2p-dev-*`**——WFD 广播只能从 P2P device 接口发出去，写进 `wlan0`（STA）不会有广播，写进 `p2p0`（组接口）则只有在组建成之后才存在。
 
 ## 使用方法
 
-1. 安装并启动本应用，在系统弹出授权时**授予 root 权限**
-2. 应用会自动完成：创建 Wi-Fi Direct 组 → 注入 WFD IE → 等待 Windows 连接
+1. 安装并启动本应用，在系统弹出授权时**授予 root 权限**；Android 13 及以上还需要授予「附近设备」(`NEARBY_WIFI_DEVICES`) 权限，否则扫描和建组会被系统直接拒绝
+2. 应用按这个顺序工作：初始化 P2P（让 `p2p-dev-*` 出现）→ 把 WFD IE 注入 `p2p-dev-*` → 把 Group Owner 意向提到最大 → 以 Group Owner 身份创建 Wi-Fi Direct 组 → 组建成后再次注入 IE，让它落到 G/O 广播里 → 等待 Windows 连接
 3. Windows 上按 `Win + K`，在列表中选择本设备（显示名与 AirPlay / DLNA 一致）
 4. 首次连接需要在手机上确认配对
+
+**接收端必须是 Group Owner**，这是设备能被手机搜到的前提：手机只扫描携带 WFD 信息元素的 G/O 广播。把 WFD IE 写进 socket 却不建组，设备在列表里永远不会出现——这条链路上任何一步缺失都表现为「搜不到设备」。
 
 成功时的日志：
 
 ```
-WfdRootHelper: WFD: sink IE injected via /data/misc/wifi/sockets/p2p0 (control port 7236)
+WfdRootHelper: WFD: primary sink advertised via /data/vendor/wifi/wpa/sockets/p2p-dev-wlan0; advertisedRtsp=7236 discoverability=true extended-listen=false verified=true
+WfdRootHelper: WFD: group owner intent set to 15 via /data/vendor/wifi/wpa/sockets/p2p-dev-wlan0
+WifiDirectManager: Sink Group Owner formed; re-injecting the WFD IE into the G/O beacon
 WfdServer: WFD: connected to source at 192.168.49.163:7236
 WfdSessionHandler: WFD: negotiated mode = 1920x1080p60
 RtpReceiver: First RTP packet: 1328B payloadType=33 payload=1316B
 ```
+
+`verified=true` 表示读回的值确实等于写进去的 IE；`verified=false` 只是「命令没被拒绝」，不代表广播已经生效。
 
 ## 手动注入（调试用）
 
@@ -88,8 +96,10 @@ adb push tools/wfdprobe /data/local/tmp/ && adb shell "chmod 755 /data/local/tmp
 ```
 
 ```bash
-adb shell "su -c '/data/local/tmp/wfdprobe /data/misc/wifi/sockets/p2p0 \"SET wifi_display 1\" \"WFD_SUBELEM_SET 0 000600111c440032\"'"
+adb shell "su -c '/data/local/tmp/wfdprobe /data/vendor/wifi/wpa/sockets/p2p-dev-wlan0 \"WFD_SUBELEM_SET 0 000600111c440032\" \"P2P_SET go_int 15\"'"
 ```
+
+`WFD_SUBELEM_SET` / `WFD_SUBELEM_GET` 是 wpa_supplicant 里唯一的 WFD 标准命令。`SET wifi_display`、`P2P_SET discoverability`、`P2P_EXT_LISTEN` 是非标准扩展，很多固件会回 `UNKNOWN COMMAND`，失败属于正常现象。
 
 其中 `000600111c440032` 是 WFD 设备信息子元素：
 
@@ -100,20 +110,22 @@ adb shell "su -c '/data/local/tmp/wfdprobe /data/misc/wifi/sockets/p2p0 \"SET wi
 | 控制端口 | `1c44` | 7236（WFD 标准 RTSP 端口） |
 | 最大吞吐 | `0032` | 50 Mbps |
 
-验证是否写入成功：
+验证是否写入成功（**必须读回比对，不能只看命令有没有被拒绝**）：
 
 ```bash
-adb shell "su -c '/data/local/tmp/wfdprobe /data/misc/wifi/sockets/p2p0 \"WFD_SUBELEM_GET 0\" \"GET wifi_display\"'"
+adb shell "su -c '/data/local/tmp/wfdprobe /data/vendor/wifi/wpa/sockets/p2p-dev-wlan0 \"WFD_SUBELEM_GET 0\"'"
 ```
 
-> **注意**：SELinux enforcing 下 `wpa_supplicant` 的**回包**会被拦截（`avc: denied { sendto } ... tcontext=u:r:su:s0`），但**命令本身已经送达并生效**。想看到回复需要临时 `setenforce 0`，看完务必 `setenforce 1` 恢复。
+期望读回 `000600111c440032`。应用里的 `wfdctl` 按这个约定返回退出码：`0` 命令被明确接受，`1` 被明确拒绝，`2` 已发送但从未收到回复（通常是 SELinux 拦掉了回包，**无法确认是否生效**）。
+
+> **注意**：SELinux enforcing 下 `wpa_supplicant` 的**回包**会被拦截（`avc: denied { sendto } ... tcontext=u:r:su:s0`）。此时命令可能已经送达并生效，也可能根本没有——只靠「没报错误」判断不出来。想可靠确认必须用 `WFD_SUBELEM_GET` 读回，或者临时 `setenforce 0`（看完务必 `setenforce 1` 恢复）。
 
 ## 撤销广播
 
 WFD IE 和 P2P 组都保存在 `wpa_supplicant`（系统进程）里，**不随应用卸载而消失**。应用正常退出时会自动撤销；如果残留，手动清理：
 
 ```bash
-adb shell "su -c '/data/local/tmp/wfdprobe /data/misc/wifi/sockets/p2p0 \"SET wifi_display 0\" \"P2P_GROUP_REMOVE p2p0\"'"
+adb shell "su -c '/data/local/tmp/wfdprobe /data/vendor/wifi/wpa/sockets/p2p-dev-wlan0 \"WFD_SUBELEM_SET 0\" \"SET wifi_display 0\" \"P2P_GROUP_REMOVE p2p0\"'"
 ```
 
 最简单的办法是**关闭再打开 Wi-Fi**，或重启设备。
@@ -169,7 +181,35 @@ RTP 负载类型为 **33（MP2T）**，每包 1328 字节 = 12 字节 RTP 头 + 
 
 **Windows 搜不到设备**
 
-按顺序检查：root 是否授权 → `WFD_SUBELEM_GET 0` 能否读回设置值 → P2P 组是否已建立（`ip addr show p2p0` 应有 `192.168.49.1`）。
+先看 WebUI 的「诊断」面板（或 `GET /api/diagnostics` 的 `miracast` 字段），它会把整条链路的状态摊开：
+
+| 字段 | 含义 | 不是预期的值说明什么 |
+|------|------|----------------------|
+| `miracast.advertiseState` | `NOT_ATTEMPTED` / `WFD_ADVERTISED` / `WFD_ADVERTISED_GO_INTENT_MISSING` / `WFD_ADVERTISE_FAILED` | 广播环节没跑通，先解决这条 |
+| `miracast.advertised` | 至少有一个 socket 没拒绝 WFD 广播命令 | `false` = 所有接口都拒绝了，通常是驱动不支持 WFD |
+| `miracast.verified` | 读回值等于写入的 IE | `false` 时「广播」只是猜测，不算数 |
+| `miracast.socketKind` | 广播落到的接口类型 | 必须是 `P2P_DEV`；`STA_FALLBACK` 发出的 IE 不会变成 P2P 广播 |
+| `miracast.groupOwnerIntentConfigured` | `P2P_SET go_int 15` 是否被接受 | `false` = 可能抢不到 GO，手机扫不到 |
+| `miracast.detail` | 本次广播的完整描述，含 `verified=` / `socket=` / 接口类型告警 | 直接读这一段通常就能定位 |
+| `miracast.checks.p2pDevSockets` | 实际找到的 `p2p-dev-*` | `NONE` 说明 P2P 还没初始化成功，或 Wi-Fi Direct 权限没给 |
+| `miracast.checks.wfdSupport` | 固件的 `wpa_supplicant` 是否包含 `WFD_SUBELEM` 符号 | 出现 `no WFD_SUBELEM symbol` 就是驱动编译时没开 Wi-Fi Display |
+| `miracast.checks.wfdSubelemReadback` | 现场 `WFD_SUBELEM_GET 0` 的原始输出 | 与写入的 `000600111c440032` 比对 |
+| `miracast.checks.p2pGet` | 现场 `P2P_GET` 的原始输出 | 里面能看到当前 `group_owner_intent` |
+| `miracast.checks.selinux` | `getenforce` 的结果 | `Enforcing` 时回包可能被拦，只能靠读回判断 |
+| `miracast.checks.groupInterface` | `p2p0` 的 IPv4 地址 | 提示 `p2p0 does not exist` = 组没建成，手机一定搜不到 |
+
+按顺序排查：root 授权 → 附近设备权限（Android 13+）→ `p2p-dev-*` 是否存在 → `verified` 是否为真 → `groupOwnerIntentConfigured` 是否为真 → `p2p0` 是否已有地址。
+
+手动命令对照：
+
+```bash
+# 广播是否真的在里面
+adb shell "su -c '/data/local/tmp/wfdprobe /data/vendor/wifi/wpa/sockets/p2p-dev-wlan0 \"WFD_SUBELEM_GET 0\"'"
+# GO 意向
+adb shell "su -c '/data/local/tmp/wfdprobe /data/vendor/wifi/wpa/sockets/p2p-dev-wlan0 \"P2P_GET go_int\"'"
+# 组是否建成
+adb shell "su -c 'ip -4 addr show p2p0'"   # 期望看到 192.168.49.1
+```
 
 **连上后几秒断开，手机无反应**
 

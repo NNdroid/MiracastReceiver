@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Build
 import com.weekd.miracastreceiver.BuildConfig
 import com.weekd.miracastreceiver.discovery.DeviceInfoProvider
+import com.weekd.miracastreceiver.miracast.WfdRootHelper
 import com.weekd.miracastreceiver.ui.PlayerActivity
 import com.weekd.miracastreceiver.ui.UrlPlaybackActivity
 import com.weekd.miracastreceiver.util.AppSettings
@@ -420,6 +421,28 @@ class WebUiServer(
                 .put("upnp", AppSettings.getUpnpPort(appContext))
                 .put("miracastRtsp", MIRACAST_RTSP_PORT))
             .put("limits", JSONObject().put("maxRequestBodyBytes", MAX_BODY_BYTES).put("maxConcurrentClients", MAX_CONCURRENT_CLIENTS).put("maxMediaUrlLength", MediaUrlRequest.MAX_URL_LENGTH).put("maxMediaHeaders", MediaUrlRequest.MAX_HEADERS).put("logEntries", WebLogBuffer.snapshot(600).size))
+            .put("miracast", buildMiracastDiagnostics())
+    }
+
+    /**
+     * The single most useful thing when a Source cannot see the sink: whether the WFD information
+     * element actually reached wpa_supplicant, on which interface, and whether this device owns a
+     * P2P group. Runs on Dispatchers.IO because it spawns a few `su` processes.
+     */
+    private fun buildMiracastDiagnostics(): JSONObject {
+        val status = WfdRootHelper.advertisementStatus()
+        val objectMap = JSONObject()
+        runCatching { WfdRootHelper.diagnostics(appContext) }.getOrElse { mapOf<String, String>() }
+            .forEach { (key, value) -> objectMap.put(key, value) }
+        return JSONObject()
+            .put("advertiseState", RuntimeState.miracastAdvertisement)
+            .put("advertised", status.success)
+            .put("verified", status.verified)
+            .put("socketPath", status.socketPath.orEmpty())
+            .put("socketKind", status.socketKind)
+            .put("groupOwnerIntentConfigured", status.groupOwnerIntentConfigured)
+            .put("detail", status.detail)
+            .put("checks", objectMap)
     }
 
     private fun buildLogs(limit: Int): JSONObject {

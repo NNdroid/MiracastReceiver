@@ -244,7 +244,6 @@ object WfdRootHelper {
         } finally {
             synchronized(advertiseLock) {
                 advertiseInProgress = false
-                advertiseLock.notifyAll()
             }
         }
     }
@@ -427,27 +426,23 @@ object WfdRootHelper {
     }
 
     /**
-     * Vendor builds put wpa_supplicant under /vendor/bin/hw, /vendor/bin, or /system/bin, so
-     * probe for the WFD symbols instead of trusting one hard-coded path. Without them no amount
-     * of injection will work.
-     */
-    /**
-     * Block briefly for an in-flight advertisement to finish. `advertiseSink` releases the lock
+     * Block briefly for an in-flight advertisement to finish. `advertiseSink` clears the flag
      * from its `finally`, so this cannot deadlock.
      */
     private fun waitForAdvertiseIdle(timeoutMs: Long = 3_000L) {
         val deadline = SystemClock.elapsedRealtime() + timeoutMs
-        synchronized(advertiseLock) {
-            while (advertiseInProgress && SystemClock.elapsedRealtime() < deadline) {
-                try {
-                    advertiseLock.wait(250L)
-                } catch (_: InterruptedException) {
-                    break
-                }
-            }
+        // Poll the volatile flag instead of monitor-waiting on it: Kotlin's Any exposes neither
+        // Object.wait nor notifyAll, and a hung root shell must never block us indefinitely.
+        while (advertiseInProgress && SystemClock.elapsedRealtime() < deadline) {
+            runCatching { Thread.sleep(50L) }
         }
     }
 
+    /**
+     * Vendor builds put wpa_supplicant under /vendor/bin/hw, /vendor/bin, or /system/bin, so
+     * probe for the WFD symbols instead of trusting one hard-coded path. Without them no amount
+     * of injection will work.
+     */
     private fun wpaSupplicantWfdSupport(): String {
         val binaries = listOf(
             "/vendor/bin/hw/wpa_supplicant",

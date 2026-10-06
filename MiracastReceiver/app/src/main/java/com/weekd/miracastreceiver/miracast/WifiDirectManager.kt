@@ -414,8 +414,21 @@ class WifiDirectManager(
             arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
         }
         Timber.w("P2P scan permissions missing, requesting ${requested.joinToString()}")
-        runCatching { appContext.requestPermissions(requested, 1001) }
-            .onFailure { Timber.d(it, "Unable to request P2P permissions from the service") }
+        // Context.requestPermissions is not in the compileSdk's android.jar, so invoke it the same
+        // way the hidden WFD setter below does. A non-Activity context can only surface the dialog
+        // while the app is in the foreground; otherwise the user grants it in Settings and the next
+        // start picks it up, since the whole scan path is retried on every prepareSink().
+        runCatching {
+            Context::class.java.getMethod(
+                "requestPermissions", Array<String>::class.java, Int::class.javaPrimitiveType!!
+            ).invoke(appContext, requested, 1001)
+        }.onFailure {
+            Timber.w(
+                it,
+                "P2P permissions not requestable from here; grant ${requested.joinToString()} " +
+                    "in Settings > Apps > Miracast Receiver > Nearby devices, then restart the receiver"
+            )
+        }
     }
 
     private fun registerReceiver() {

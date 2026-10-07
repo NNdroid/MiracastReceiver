@@ -49,7 +49,13 @@ class MainActivity : AppCompatActivity() {
         private const val FOCUS_ANIMATION_MS = 90L
         private val WIFI_DIRECT_PERMISSIONS: Array<String>
             get() = if (Build.VERSION.SDK_INT >= 33) {
-                arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
+                // `NEARBY_WIFI_DEVICES` alone covers the scan APIs but not the Wi-Fi service's
+                // broadcast gate, so a sink can be listed and still never see its group form.
+                arrayOf(
+                    Manifest.permission.NEARBY_WIFI_DEVICES,
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                )
             } else {
                 arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
             }

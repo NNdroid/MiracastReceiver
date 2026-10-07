@@ -25,6 +25,20 @@ class XiaomiMiracastInteropSourceTest {
     }
 
     @Test
+    fun locationPermissionIsGrantedBecauseTheWifiServiceDropsP2pBroadcastsOtherwise() {
+        // The Wi-Fi service checks a location permission before delivering
+        // android.net.wifi.p2p.CONNECTION_STATE_CHANGE. A sink holding only NEARBY_WIFI_DEVICES is
+        // listed by every source, its group forms, and it never learns about it — listable but
+        // never connectable. Root grants it through pm, so no Settings detour is needed.
+        assertTrue(rootHelper.contains("fun grantWifiPermissions"))
+        assertTrue(rootHelper.contains("pm grant"))
+        assertTrue(rootHelper.contains("ACCESS_FINE_LOCATION"))
+        assertTrue(wifiDirect.contains("WfdRootHelper.grantWifiPermissions(appContext)"))
+        assertTrue(manifest.contains("android.permission.ACCESS_FINE_LOCATION"))
+        assertTrue(manifest.contains("android.permission.NEARBY_WIFI_DEVICES"))
+    }
+
+    @Test
     fun rootGroupFormationFallbackExistsBecauseTheFrameworkRefusesOnVendorBuilds() {
         // createGroup() has no root equivalent and fails with ERROR on many vendor builds, leaving
         // the sink without a group. Without a group there is no G/O beacon, so a source can list

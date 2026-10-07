@@ -88,7 +88,12 @@ class WifiDirectManager(
             // actual request on the main handler.
             val granted = p2pPermissionsGranted()
             if (isStarted) {
-                if (!granted) mainHandler.post { requestP2pPermissions() }
+                // Root can grant the location permission the Wi-Fi service checks before delivering
+                // P2P connection broadcasts, which otherwise makes the sink listable but never
+                // connectable. Done here rather than at request time so a denied dialog still works
+                // as the fallback.
+                WfdRootHelper.grantWifiPermissions(appContext)
+                if (!p2pPermissionsGranted()) mainHandler.post { requestP2pPermissions() }
                 mainHandler.post { startFrameworkP2p(p2p) }
             }
         }, "wfd-prepare").apply { isDaemon = true }.start()
@@ -489,8 +494,16 @@ class WifiDirectManager(
 
     private fun requestP2pPermissions() {
         if (Build.VERSION.SDK_INT < 23) return
+        // `NEARBY_WIFI_DEVICES` is enough for the scan APIs, but the Wi-Fi service also checks a
+        // location permission before it delivers P2P connection broadcasts. Ask for both: a sink
+        // holding only scan permission is listable to every source yet never sees its own group
+        // come up.
         val requested = if (Build.VERSION.SDK_INT >= 33) {
-            arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
+            arrayOf(
+                Manifest.permission.NEARBY_WIFI_DEVICES,
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            )
         } else {
             arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
         }

@@ -1,10 +1,13 @@
 package com.weekd.miracastreceiver.miracast
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Looper
 import android.os.SystemClock
+import androidx.core.content.ContextCompat
 import timber.log.Timber
 import java.io.File
 import java.util.zip.ZipFile
@@ -116,6 +119,46 @@ object WfdRootHelper {
     private var lastAdvertisementStatus = AdvertisementStatus(success = false)
 
     fun advertisementStatus(): AdvertisementStatus = lastAdvertisementStatus
+
+    /**
+     * The Wi-Fi service refuses to deliver `android.net.wifi.p2p.*` broadcasts to a receiver that
+     * holds no location permission. On a stock build `NEARBY_WIFI_DEVICES` satisfies that check;
+     * on vendor builds it still consults `ACCESS_FINE_LOCATION`, and then the failure is
+     * invisible: discovery succeeds, the Source lists the sink, the group forms, and the receiver
+     * never learns about it because `CONNECTION_STATE_CHANGE` is dropped on the way in. That is
+     * precisely the "visible but never connectable" symptom. Root can grant these through `pm`
+     * with no Settings detour, so no user interaction is needed.
+     */
+    fun grantWifiPermissions(context: Context): Boolean {
+        val wanted = listOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        )
+        val held = wanted.filter {
+            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+        }
+        if (held.isNotEmpty()) return true
+        val output = runAsRootCapture(
+            wanted.joinToString("\n") { "pm grant ${context.packageName} $it 2>/dev/null" }
+        )
+        val nowHeld = wanted.filter {
+            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+        }
+        fun shortName(permission: String) = permission.substringAfterLast('.')
+        if (nowHeld.isNotEmpty()) {
+            Timber.i(
+                "WFD: granted ${nowHeld.map { shortName(it) }.joinToString()} " +
+                    "so the Wi-Fi service will deliver P2P broadcasts"
+            )
+        } else {
+            Timber.w(
+                "WFD: could not self-grant ${wanted.map { shortName(it) }.joinToString()} " +
+                    "(pm output='${output?.trim()?.take(160) ?: "no root available"}'); the Wi-Fi service " +
+                    "will keep dropping P2P connection broadcasts"
+            )
+        }
+        return nowHeld.isNotEmpty()
+    }
 
     /**
      * WFD Device Information field, laid out per the Wi-Fi Display spec's 16-bit definition:

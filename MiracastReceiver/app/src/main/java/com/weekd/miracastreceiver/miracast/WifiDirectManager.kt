@@ -67,6 +67,9 @@ class WifiDirectManager(
 
     private var connectionPollInFlight = false
 
+    /** Last topology the poll observed, so an unchanged group is not re-handled on every tick. */
+    private var lastPollTopology = "no-group"
+
     private var channel: WifiP2pManager.Channel? = null
     private var receiver: BroadcastReceiver? = null
     private var isStarted = false
@@ -87,6 +90,7 @@ class WifiDirectManager(
         }
         isStarted = true
         sinkGroupAttempted = false
+        lastPollTopology = "no-group"
         WfdSourceHint.clear()
 
         Thread({
@@ -206,7 +210,7 @@ class WifiDirectManager(
 
     /**
      * Reuse an existing group, or create one so this device becomes the Group Owner. Without this
-     * there is no p2p0, no G/O beacon, and no WFD advertisement on the air.
+     * there is no group interface, no G/O beacon, and no WFD advertisement on the air.
      */
     private fun ensureSinkGroup() {
         val p2p = p2pManager() ?: return
@@ -214,13 +218,37 @@ class WifiDirectManager(
         try {
             p2p.requestGroupInfo(ch) { existing ->
                 if (!isStarted) return@requestGroupInfo
-                if (existing != null) {
-                    Timber.i("P2P group already exists: ${existing.networkName}; sinkIsOwner=${existing.isGroupOwner}")
-                    // Someone already owns the group, so the keep-alive should not create another.
-                    WfdRootHelper.setKeepAliveGroupFormation(false)
-                    onGroupReady(existing)
-                } else {
-                    createSinkGroup()
+                when {
+                    existing == null -> createSinkGroup()
+
+                    existing.isGroupOwner -> {
+                        Timber.i("P2P group already exists: ${existing.networkName}; sinkIsOwner=true")
+                        // We own it, so the keep-alive should not create another.
+                        WfdRootHelper.setKeepAliveGroupFormation(false)
+                        onGroupReady(existing)
+                    }
+
+                    existing.clientList.isNotEmpty() -> {
+                        // A Source is attached and it owns the group. That is a legal WFD topology
+                        // and tearing the group down would drop the client that is there to cast,
+                        // so this sink serves it instead.
+                        Timber.i("P2P group exists owned by the Source: ${existing.networkName}; serving it")
+                        onGroupReady(existing)
+                    }
+
+                    else -> {
+                        // A group exists that this sink does not own and nobody is attached to. In
+                        // practice that is a Source that won the Group Owner negotiation and formed
+                        // its own group, leaving this device with a beacon and no network behind it.
+                        // The Source cannot reach an RTSP server that is not on the network, so a
+                        // connection attempt dies here. Creating a group of our own is what turns
+                        // that into a joinable sink.
+                        Timber.i(
+                            "P2P group ${existing.networkName} exists but is not ours and has no " +
+                                "clients; creating a Group Owner group of our own"
+                        )
+                        createSinkGroup()
+                    }
                 }
                 WfdRootHelper.refreshAdvertisingAsync(appContext, force = true)
                 startPeerDiscovery()
@@ -646,13 +674,25 @@ class WifiDirectManager(
         try {
             p2p.requestConnectionInfo(ch) { info ->
                 connectionPollInFlight = false
-                if (info.groupFormed) {
-                    Timber.i("P2P poll saw a formed group; broadcast had not reported it")
-                    refreshConnectionState()
-                } else if (!sinkGroupAttempted) {
-                    // No group yet is also a state worth detecting by poll: the sink owns
-                    // creating it, so do not wait for a broadcast about a group nobody made.
-                    ensureSinkGroup()
+                val topology = if (info.groupFormed) {
+                    "grouped:${info.isGroupOwner}:${info.groupOwnerAddress?.hostAddress}"
+                } else {
+                    "no-group"
+                }
+                if (topology != lastPollTopology) {
+                    lastPollTopology = topology
+                    if (info.groupFormed) {
+                        Timber.i(
+                            "P2P poll saw a group the broadcast had not reported: " +
+                                "sinkIsOwner=${info.isGroupOwner} " +
+                                "go=${info.groupOwnerAddress?.hostAddress ?: "-"}"
+                        )
+                        refreshConnectionState()
+                    } else if (!sinkGroupAttempted) {
+                        // No group yet is also a state worth detecting by poll: the sink owns
+                        // creating it, so do not wait for a broadcast about a group nobody made.
+                        ensureSinkGroup()
+                    }
                 }
                 if (isStarted) mainHandler.postDelayed({ pollConnectionState() }, CONNECTION_POLL_MS)
             }

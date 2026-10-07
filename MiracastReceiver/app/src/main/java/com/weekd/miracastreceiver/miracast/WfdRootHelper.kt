@@ -697,9 +697,21 @@ object WfdRootHelper {
         runAsRootOutput("${binaryPath} $socketPath \"P2P_GET\"")
             ?.let { parseGroupOwnerIntent(it) }
 
+    /**
+     * The group interfaces currently on the box. Stock Android names them `p2p0`; a supplicant
+     * without `use_p2p_group_interface=1` names them `p2p-<phy>-<n>`. `p2p-dev-*` is the P2P
+     * device and must be excluded, or a plain device looks like a formed group.
+     */
+    internal fun groupInterfaceNames(): List<String> =
+        runAsRootOutput("ls /sys/class/net 2>/dev/null").orEmpty()
+            .lineSequence()
+            .map { it.trim() }
+            .filter { it.startsWith("p2p") && !it.startsWith("p2p-dev-") }
+            .toList()
+
     /** True when a group interface is present, i.e. this device is currently a Group Owner. */
     internal fun groupInterfaceExists(): Boolean =
-        runAsRoot("test -e /sys/class/net/p2p0").exitCode == 0 ||
+        groupInterfaceNames().isNotEmpty() ||
             existingControlSockets().any { kindOf(it) == SocketKind.GROUP_IFACE }
 
     /**
@@ -862,11 +874,16 @@ object WfdRootHelper {
             }
             out["wfdSupport"] = wpaSupplicantWfdSupport()
         }
-        out["groupInterface"] = runAsRootOutput("ip -4 addr show p2p0").orEmpty().ifBlank {
-            if (runAsRoot("test -e /sys/class/net/p2p0").success) {
-                "p2p0 exists but has no IPv4 address yet — the group is still coming up"
+        out["groupInterface"] = run {
+            val names = groupInterfaceNames()
+            if (names.isEmpty()) {
+                "no group interface — this device is not a Group Owner, so sources cannot find it"
             } else {
-                "p2p0 does not exist — this device is not a Group Owner, so sources cannot find it"
+                val iface = names.first()
+                val addrs = runAsRootOutput("ip -4 addr show $iface").orEmpty()
+                addrs.ifBlank {
+                    "$iface exists but has no IPv4 address yet — the group is still coming up"
+                }
             }
         }
         out["selinux"] = runAsRootOutput("getenforce").orEmpty()
@@ -910,7 +927,11 @@ object WfdRootHelper {
         val name = socketPath.substringAfterLast('/')
         return when {
             name.startsWith("p2p-dev-") -> SocketKind.P2P_DEV
-            name.matches(Regex("p2p\\d+")) -> SocketKind.GROUP_IFACE
+            // `p2p-dev-*` is the P2P device; anything else with a p2p prefix is a group
+            // interface. Stock Android calls it `p2p0`, but a supplicant built without
+            // `use_p2p_group_interface=1` calls it `p2p-<phy>-<n>`, and treating that as a
+            // plain STA interface made a live Group Owner group look like there was none.
+            name.startsWith("p2p") -> SocketKind.GROUP_IFACE
             else -> SocketKind.STA_FALLBACK
         }
     }

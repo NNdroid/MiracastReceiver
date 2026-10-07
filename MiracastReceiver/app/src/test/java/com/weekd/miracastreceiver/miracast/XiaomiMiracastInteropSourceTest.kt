@@ -59,12 +59,37 @@ class XiaomiMiracastInteropSourceTest {
         // On the receiver the appop came back "Uid mode: FINE_LOCATION: foreground" and could not
         // be forced past it, so BroadcastQueue kept refusing CONNECTION_STATE_CHANGE with every
         // permission granted. requestConnectionInfo() is a plain call with no appop, so a timer
-        // poll observes the join the broadcast never reported. Without it the sink is blind in
-        // exactly the case a user reports as "it shows up but won't connect".
+        // poll observes the join the broadcast never reported. Verified live: the log showed
+        // "P2P poll saw a group the broadcast had not reported" repeating for the Source's group.
         assertTrue(wifiDirect.contains("fun pollConnectionState"))
         assertTrue(wifiDirect.contains("CONNECTION_POLL_MS"))
         assertTrue(wifiDirect.contains("connectionPollInFlight"))
         assertTrue(wifiDirect.contains("mainHandler.postDelayed({ if (isStarted) pollConnectionState() }"))
+        // An unchanged topology must not be re-handled every tick, or the sink re-injects its WFD
+        // element twice a second and churns the supplicant for nothing.
+        assertTrue(wifiDirect.contains("lastPollTopology"))
+    }
+
+    @Test
+    fun aForeignGroupWithNoClientsTriggersOurOwnGroupOwnerGroup() {
+        // On the receiver the poll found DIRECT-h8-Redmi 10X with sinkIsOwner=false and
+        // clients=0: the Source had won Group Owner negotiation and formed its own group, so
+        // this device held a beacon with no network behind it. Treating that group as ours skips
+        // createGroup() entirely, the Source cannot reach an RTSP server that is not on the
+        // network, and the attempt dies with no error anywhere.
+        assertTrue(wifiDirect.contains("existing.clientList.isNotEmpty()"))
+        assertTrue(wifiDirect.contains("creating a Group Owner group of our own"))
+    }
+
+    @Test
+    fun theGroupInterfaceNameIsNotHardcodedToP2p0() {
+        // A supplicant built without use_p2p_group_interface=1 names its group interface
+        // p2p-<phy>-<n> instead of p2p0. The receiver on this project is exactly that, so
+        // matching only p2p\\d+ made a live Group Owner group look absent, and the diagnostics
+        // then reported "not a Group Owner, so sources cannot find it" while one was in fact up.
+        assertFalse(rootHelper.contains("name.matches(Regex(\"p2p\\\\d+\"))"))
+        assertTrue(rootHelper.contains("fun groupInterfaceNames"))
+        assertTrue(rootHelper.contains("!it.startsWith(\"p2p-dev-\")"))
     }
 
     @Test

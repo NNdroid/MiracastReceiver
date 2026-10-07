@@ -8,6 +8,7 @@ import timber.log.Timber
 import java.io.InputStream
 import java.io.OutputStream
 import java.net.Socket
+import java.net.SocketTimeoutException
 import java.nio.charset.StandardCharsets
 
 /**
@@ -46,6 +47,23 @@ class WfdSessionHandler(
     companion object {
         private const val MAX_RTSP_BODY_BYTES = 1024 * 1024
 
+        /**
+         * Silence budget before a request has been negotiated. A real Source sends its first
+         * OPTIONS or GET_PARAMETER within a second or two of dialing; a connection that sits
+         * silent this long is a half-open socket — the peer crashed or its FIN was lost in transit
+         * and the kernel will never deliver EOF. Without a timeout `readMessage` blocks on that
+         * socket forever, which is how one abandoned probe can wedge the whole RTSP server.
+         */
+        private const val IDLE_TIMEOUT_MS = 30_000L
+
+        /**
+         * Silence budget once PLAY has been acknowledged. RTP now carries the media, so RTSP going
+         * quiet is normal — a Source holds the control socket open for the entire session and may
+         * not send TEARDOWN at all when it is closed from the phone side. The budget exists only to
+         * bound how long a half-open stream session can occupy its handler.
+         */
+        private const val IDLE_TIMEOUT_STREAMING_MS = 10 * 60 * 1000L
+
         /** Broad WFD R1 H.264 set retained for existing Windows/Android interoperability. */
         private const val VIDEO_FORMATS =
             "00 00 03 10 0001FFFF 1FFFFFFF 00000FFF 00 0000 0000 00 none none"
@@ -59,6 +77,10 @@ class WfdSessionHandler(
 
     fun handleSession() {
         try {
+            // A blocking read with no timeout is what lets a dead peer pin this handler forever:
+            // the kernel never hands back EOF for a half-open connection, so readMessage never
+            // returns and no later Source gets answered.
+            runCatching { socket.soTimeout = IDLE_TIMEOUT_MS.toInt() }
             Timber.i(
                 "WFD RTSP session started with source ${socket.inetAddress.hostAddress}:${socket.port} " +
                     "RTP=$rtpPort RTCP=${rtcpPort()}"
@@ -77,12 +99,35 @@ class WfdSessionHandler(
         }
     }
 
+    /** Arm the idle budget appropriate to the current phase. */
+    private fun armReadTimeout() {
+        runCatching {
+            socket.soTimeout = if (streamStarted) IDLE_TIMEOUT_STREAMING_MS.toInt() else IDLE_TIMEOUT_MS.toInt()
+        }
+    }
+
+    /**
+     * One RTSP message. Returns null when the peer went away, or when it has been silent long
+     * enough to be considered gone; a timeout while a stream is live is not a failure — RTSP is
+     * quiet for the whole duration of one, so the phase decides.
+     */
     private fun readMessage(): String? {
         val buf = StringBuilder()
         val one = ByteArray(1)
         while (!buf.endsWith("\r\n\r\n")) {
-            val n = input.read(one)
+            val n = try {
+                input.read(one)
+            } catch (e: SocketTimeoutException) {
+                if (streamStarted) {
+                    // Streaming: silence is expected, just extend the wait.
+                    armReadTimeout()
+                    continue
+                }
+                Timber.i("WFD: source silent for ${IDLE_TIMEOUT_MS}ms before negotiating; closing")
+                return null
+            }
             if (n <= 0) return null
+            armReadTimeout()
             buf.append(one[0].toInt().toChar())
             if (buf.length > 64 * 1024) {
                 Timber.w("WFD: header too large, dropping session")
@@ -100,8 +145,14 @@ class WfdSessionHandler(
             val body = ByteArray(contentLength)
             var read = 0
             while (read < contentLength) {
-                val n = input.read(body, read, contentLength - read)
+                val n = try {
+                    input.read(body, read, contentLength - read)
+                } catch (e: SocketTimeoutException) {
+                    Timber.w("WFD: source stalled mid-body after $read/$contentLength bytes")
+                    return null
+                }
                 if (n <= 0) return null
+                armReadTimeout()
                 read += n
             }
             buf.append(String(body, StandardCharsets.UTF_8))

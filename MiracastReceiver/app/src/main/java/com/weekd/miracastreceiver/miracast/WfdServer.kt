@@ -7,6 +7,7 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * Wi-Fi Display (Miracast) session acceptor.
@@ -43,6 +44,9 @@ class WfdServer(
     private var sessionHandler: WfdSessionHandler? = null
     private var rtpReceiver: RtpReceiver? = null
 
+    /** Running session coroutines, so stop() can close them instead of leaking the socket. */
+    private val activeSessions = CopyOnWriteArrayList<Job>()
+
     var onConnectionRequested: ((clientName: String, clientAddress: String) -> Unit)? = null
     var onConnectionEstablished: ((sessionId: String) -> Unit)? = null
     var onStreamStarted: ((rtpPort: Int) -> Unit)? = null
@@ -66,8 +70,34 @@ class WfdServer(
         scope.launch {
             while (isRunning) {
                 val socket = acceptSource()
-                if (socket != null) runSession(socket)
+                if (socket != null) serveSource(socket)
             }
+        }
+    }
+
+    /**
+     * Each Source is handled on its own coroutine. Running `runSession` inline in the accept loop
+     * was a fatal flaw: it blocks on `readMessage`, and a Source that opens the TCP connection and
+     * then goes silent — a half-open socket left by a failed handshake, a peer that bailed mid-M3
+     * without sending FIN — parked the loop forever. Every later Source then completed the TCP
+     * handshake, sat in the backlog unanswered, and gave up on its own RTSP timeout. That presents
+     * to the user as exactly "the receiver shows up in the list but I cannot connect".
+     *
+     * One session at a time is still how Miracast actually runs; this only guarantees the listener
+     * keeps answering instead of freezing.
+     */
+    private fun serveSource(socket: Socket) {
+        val job = scope.launch {
+            try {
+                runSession(socket)
+            } catch (e: Exception) {
+                Timber.e(e, "WFD: session coroutine failed")
+            }
+        }
+        activeSessions += job
+        job.invokeOnCompletion {
+            activeSessions.remove(job)
+            runCatching { socket.close() }
         }
     }
 
@@ -146,6 +176,8 @@ class WfdServer(
         isRunning = false
         runCatching { listener?.close() }
         listener = null
+        activeSessions.forEach { it.cancel() }
+        activeSessions.clear()
         sessionHandler?.close()
         sessionHandler = null
         rtpReceiver?.stop()

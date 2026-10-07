@@ -440,13 +440,37 @@ class WifiDirectManager(
             .newInstance(1, 7236, 50)
     }
 
+    /**
+     * The group already announced, keyed on identity rather than content. Re-announcing a group
+     * that has not changed re-injects the WFD element and churns the supplicant every poll tick —
+     * on this hardware that load lands squarely on top of a Source's in-flight handshake.
+     */
+    @Volatile
+    private var announcedGroupKey: String? = null
+
+    /** Group clients already reported, so a stable membership does not re-fire connect events. */
+    private val announcedClients = linkedSetOf<String>()
+
     private fun onGroupReady(group: WifiP2pGroup) {
         Timber.i("P2P group ready: ${group.networkName}; sinkIsOwner=${group.isGroupOwner}; clients=${group.clientList.size}")
-        onGroupCreated?.invoke(group)
-        setDeviceName(deviceName)
-        WfdRootHelper.refreshAdvertisingAsync(appContext, force = true)
-        group.clientList.forEach { rememberSourceDevice(it, "group-client") }
-        group.clientList.firstOrNull()?.let { onDeviceConnected?.invoke(it) }
+        val key = "${group.networkName}|${group.isGroupOwner}"
+        val freshGroup = key != announcedGroupKey
+        if (freshGroup) {
+            announcedGroupKey = key
+            announcedClients.clear()
+            onGroupCreated?.invoke(group)
+            setDeviceName(deviceName)
+            // The freshly formed group's beacon does not carry the WFD element yet, so the
+            // injection has to be forced. On an unchanged group this is pure supplicant churn.
+            WfdRootHelper.refreshAdvertisingAsync(appContext, force = true)
+        }
+
+        group.clientList.forEach { client ->
+            if (announcedClients.add(client.deviceAddress)) {
+                rememberSourceDevice(client, "group-client")
+                onDeviceConnected?.invoke(client)
+            }
+        }
     }
 
     private fun rememberSourceDevice(device: WifiP2pDevice, reason: String) {
@@ -631,6 +655,9 @@ class WifiDirectManager(
                     p2p.requestGroupInfo(ch) { group -> if (group != null) onGroupReady(group) }
                 } else {
                     WfdSourceHint.clear()
+                    // A torn-down group will be formed again, so it must count as fresh a second time.
+                    announcedGroupKey = null
+                    announcedClients.clear()
                     onDeviceDisconnected?.invoke()
                     if (isStarted) {
                         WfdRootHelper.refreshAdvertisingAsync(appContext, force = true)

@@ -366,4 +366,51 @@ class XiaomiMiracastInteropSourceTest {
         assertFalse(session.contains("setupCseq"))
         assertFalse(session.contains("playCseq"))
     }
+
+    @Test
+    fun eachSourceIsServedOnItsOwnCoroutineSoOneStaleClientCannotWedgeTheServer() {
+        // Running runSession inline in the accept loop meant a Source that opened the TCP
+        // connection and went silent parked the whole loop: later Sources completed the handshake,
+        // sat in the backlog unanswered, and timed out. On-device this reads as "the receiver
+        // shows up in the list but I cannot connect", because the RTSP reply never arrives.
+        assertTrue(server.contains("serveSource(socket)"))
+        assertTrue(server.contains("private fun serveSource(socket: Socket)"))
+        assertTrue(server.contains("scope.launch {"))
+        assertTrue(server.contains("activeSessions"))
+        assertTrue(server.contains("CopyOnWriteArrayList"))
+        // The accept loop must not call runSession synchronously.
+        assertFalse(server.contains("if (socket != null) runSession(socket)"))
+    }
+
+    @Test
+    fun sessionsAreCancelledOnStopSoTheirSocketsAreNotLeaked() {
+        assertTrue(server.contains("activeSessions.forEach { it.cancel() }"))
+        assertTrue(server.contains("runCatching { socket.close() }"))
+    }
+
+    @Test
+    fun rtspReadsHaveATimeoutBecauseATimeoutIsTheOnlyWayToSeeAHalfOpenPeer() {
+        // A peer that dies without delivering FIN never produces EOF, so a plain blocking read
+        // holds the handler indefinitely. The timeout is what lets the session end at all.
+        assertTrue(session.contains("IDLE_TIMEOUT_MS"))
+        assertTrue(session.contains("IDLE_TIMEOUT_STREAMING_MS"))
+        assertTrue(session.contains("SocketTimeoutException"))
+        assertTrue(session.contains("socket.soTimeout"))
+        assertTrue(session.contains("armReadTimeout()"))
+        // Silence while a stream is live is legitimate; before negotiation it is not.
+        assertTrue(session.contains("if (streamStarted)"))
+        assertTrue(session.contains("silent for"))
+    }
+
+    @Test
+    fun groupReadyIsIdempotentSoAStableGroupIsNotReAnnouncedEveryPollTick() {
+        // Every re-announcement forced a WFD element re-injection into the supplicant. That churn
+        // landed on top of a Source's in-flight handshake and made the failure worse.
+        assertTrue(wifiDirect.contains("announcedGroupKey"))
+        assertTrue(wifiDirect.contains("announcedClients"))
+        assertTrue(wifiDirect.contains("announcedClients.add(client.deviceAddress)"))
+        assertTrue(wifiDirect.contains("val freshGroup = key != announcedGroupKey"))
+        // A torn-down group must count as fresh again when it is formed a second time.
+        assertTrue(wifiDirect.contains("announcedGroupKey = null"))
+    }
 }

@@ -121,31 +121,32 @@ object WfdRootHelper {
     fun advertisementStatus(): AdvertisementStatus = lastAdvertisementStatus
 
     /**
-     * Two gates stand between this receiver and the Wi-Fi service's own broadcasts: the runtime
-     * permission, and the location appop. `NEARBY_WIFI_DEVICES` covers the scan and group APIs but
-     * neither of them on vendor builds, so with only that granted the failure is invisible —
-     * discovery succeeds, every Source lists the sink, its group forms, and `CONNECTION_STATE_CHANGE`
-     * is dropped on the way in. That is precisely the "visible but never connectable" symptom.
-     * Root grants both through `pm` and `appops`, so no Settings detour and no user interaction.
+     * Three gates stand between this receiver and the Wi-Fi service's own broadcasts, and on a
+     * rooted vendor build none of them is user-consented. Root grants all three through `pm` and
+     * `appops`, so no Settings detour and no interaction.
      *
-     * On the receiver tested the appop came back capped at foreground-only mode after granting,
-     * which the Wi-Fi service reports as `excludes appop android:fine_location`. That residual
-     * case only hides group state from this app; the RTSP side binds every interface and does not
-     * depend on the broadcast, so a connection still completes.
+     * 1. `NEARBY_WIFI_DEVICES` (API 33+). It is the load-bearing one: without it
+     *    `WifiP2pManager.requestGroupInfo()` throws `SecurityException`, so the sink never creates
+     *    the group that makes it the Group Owner. The supplicant still puts the WFD information
+     *    element on the air, which is exactly why the Source lists the device and then cannot
+     *    connect to it — there is a beacon and nothing behind it.
+     * 2. `ACCESS_FINE_LOCATION` / `ACCESS_COARSE_LOCATION`. The Wi-Fi service checks these before
+     *    it dispatches `CONNECTION_STATE_CHANGE` to a receiver, and a broadcast refused here is
+     *    silent: the group forms and the sink never learns about it.
+     * 3. The location *appop*. A freshly granted permission leaves it in foreground-only mode, so
+     *    a broadcast arriving while this app is backgrounded is dropped a second time. It cannot
+     *    always be forced past that cap, which is why the manager also polls
+     *    `requestConnectionInfo()` rather than trusting the broadcast alone.
      */
     fun grantWifiPermissions(context: Context): Boolean {
-        val wanted = listOf(
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION
-        )
+        val wanted = buildList {
+            if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.NEARBY_WIFI_DEVICES)
+            add(Manifest.permission.ACCESS_FINE_LOCATION)
+            add(Manifest.permission.ACCESS_COARSE_LOCATION)
+        }
         fun shortName(permission: String) = permission.substringAfterLast('.')
-        val held = wanted.filter {
-            ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
-        }
-        if (held.isEmpty()) {
-            runAsRootCapture(wanted.joinToString("\n") { "pm grant ${context.packageName} $it 2>/dev/null" })
-        }
-        // The runtime permission is only the first of two gates. The Wi-Fi service also consults the
+        runAsRootCapture(wanted.joinToString("\n") { "pm grant ${context.packageName} $it 2>/dev/null" })
+        // The permissions are only the first of the three gates. The Wi-Fi service also consults the
         // location *appop*, and a freshly granted permission leaves it in foreground-only mode,
         // which still drops a broadcast that arrives while the receiver is backgrounded.
         runAsRootCapture(

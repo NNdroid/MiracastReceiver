@@ -54,7 +54,18 @@ class WifiDirectManager(
 
         /** P2P group interfaces need a moment after initialize() before they accept commands. */
         val SINK_PREPARE_DELAY_MS = 750L
+
+        /**
+         * Cadence for the broadcast-independent connection poll. `CONNECTION_STATE_CHANGE` is not
+         * guaranteed to arrive: the Wi-Fi service holds a foreground-only location appop that a
+         * backgrounded receiver cannot satisfy, so the broadcast gets dropped and the sink never
+         * learns a Source joined. `requestConnectionInfo()` is a plain API call with no appop, so
+         * polling it is the fallback that makes the connection observable regardless.
+         */
+        val CONNECTION_POLL_MS = 2_000L
     }
+
+    private var connectionPollInFlight = false
 
     private var channel: WifiP2pManager.Channel? = null
     private var receiver: BroadcastReceiver? = null
@@ -137,6 +148,9 @@ class WifiDirectManager(
 
             frameworkStarted = true
             registerReceiver()
+            // The poll runs whether or not the receiver registered: if the Wi-Fi service refuses
+            // to deliver its broadcasts to this UID, this is the only path that notices a join.
+            mainHandler.postDelayed({ if (isStarted) pollConnectionState() }, CONNECTION_POLL_MS)
             setWfdInfo()
             setMiracastMode(2, "SINK")
             registerLocalService()
@@ -598,6 +612,54 @@ class WifiDirectManager(
             }
         } catch (e: Exception) {
             Timber.d("requestConnectionInfo unavailable: ${e.message}")
+        }
+    }
+
+    /**
+     * Same state lookup as the broadcast path, driven by a timer instead of
+     * `WIFI_P2P_CONNECTION_CHANGED_ACTION`. Two reasons the poll exists:
+     *
+     *  - The Wi-Fi service dispatches that broadcast only to receivers it thinks are allowed to
+     *    observe location, and on vendor builds the underlying location appop is capped at
+     *    foreground-only. This app is usually backgrounded on a TV box, so the broadcast is
+     *    dropped and the sink is blind to a Source that has in fact connected.
+     *  - A dropped broadcast is indistinguishable from "no change", so without this the failure is
+     *    silent in exactly the case a user reports as "it shows up but won't connect".
+     *
+     * The in-flight guard keeps a slow response from stacking requests behind each other.
+     */
+    private fun pollConnectionState() {
+        if (!isStarted) return
+        val p2p = p2pManager() ?: return
+        val ch = channel ?: return
+        // Without NEARBY_WIFI_DEVICES the request would only throw SecurityException. Keep ticking
+        // so the poll starts working on its own once root's `pm grant` takes effect.
+        if (!p2pPermissionsGranted()) {
+            mainHandler.postDelayed({ pollConnectionState() }, CONNECTION_POLL_MS)
+            return
+        }
+        if (connectionPollInFlight) {
+            mainHandler.postDelayed({ pollConnectionState() }, CONNECTION_POLL_MS)
+            return
+        }
+        connectionPollInFlight = true
+        try {
+            p2p.requestConnectionInfo(ch) { info ->
+                connectionPollInFlight = false
+                if (info.groupFormed) {
+                    Timber.i("P2P poll saw a formed group; broadcast had not reported it")
+                    refreshConnectionState()
+                } else if (!sinkGroupAttempted) {
+                    // No group yet is also a state worth detecting by poll: the sink owns
+                    // creating it, so do not wait for a broadcast about a group nobody made.
+                    ensureSinkGroup()
+                }
+                if (isStarted) mainHandler.postDelayed({ pollConnectionState() }, CONNECTION_POLL_MS)
+            }
+        } catch (e: Exception) {
+            connectionPollInFlight = false
+            Timber.d("P2P poll skipped: ${e.message}")
+            if (isStarted) mainHandler.postDelayed({ pollConnectionState() }, CONNECTION_POLL_MS)
         }
     }
 

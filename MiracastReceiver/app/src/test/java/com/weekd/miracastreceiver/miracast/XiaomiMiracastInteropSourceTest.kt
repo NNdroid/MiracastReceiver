@@ -26,18 +26,45 @@ class XiaomiMiracastInteropSourceTest {
 
     @Test
     fun locationPermissionIsGrantedBecauseTheWifiServiceDropsP2pBroadcastsOtherwise() {
-        // The Wi-Fi service checks a location permission before delivering
-        // android.net.wifi.p2p.CONNECTION_STATE_CHANGE. A sink holding only NEARBY_WIFI_DEVICES is
-        // listed by every source, its group forms, and it never learns about it — listable but
-        // never connectable. Root grants it through pm, so no Settings detour is needed.
+        // The Wi-Fi service checks a location permission and a location appop before delivering
+        // android.net.wifi.p2p.CONNECTION_STATE_CHANGE. Denied either way, the failure is silent:
+        // the group forms and the receiver never learns about it — listable but never connectable.
+        // Root grants both through pm and appops, so no Settings detour is needed.
         assertTrue(rootHelper.contains("fun grantWifiPermissions"))
         assertTrue(rootHelper.contains("pm grant"))
         assertTrue(rootHelper.contains("cmd appops set"))
         assertTrue(rootHelper.contains("android:fine_location"))
+        assertTrue(rootHelper.contains("android:coarse_location"))
         assertTrue(rootHelper.contains("ACCESS_FINE_LOCATION"))
         assertTrue(wifiDirect.contains("WfdRootHelper.grantWifiPermissions(appContext)"))
         assertTrue(manifest.contains("android.permission.ACCESS_FINE_LOCATION"))
         assertTrue(manifest.contains("android.permission.NEARBY_WIFI_DEVICES"))
+    }
+
+    @Test
+    fun nearbyWifiDevicesIsSelfGrantedBecauseWithoutItTheSinkNeverFormsItsGroup() {
+        // The live receiver had NEARBY_WIFI_DEVICES still denied after the location grants landed,
+        // and on API 33+ that is what makes WifiP2pManager.requestGroupInfo() throw
+        // SecurityException. The sink then never creates the group that makes it the Group Owner:
+        // the supplicant has already put the WFD element on the air, so every source lists the
+        // device and none of them can connect to it. Granting location alone leaves that symptom.
+        assertTrue(rootHelper.contains("Manifest.permission.NEARBY_WIFI_DEVICES"))
+        // Every wanted permission rides the same pm path, so the new one needs no new plumbing.
+        assertTrue(rootHelper.contains("pm grant \${context.packageName} \$it"))
+        assertTrue(rootHelper.contains("buildList"))
+    }
+
+    @Test
+    fun connectionStateIsPolledBecauseTheLocationAppopIsCappedAtForegroundOnly() {
+        // On the receiver the appop came back "Uid mode: FINE_LOCATION: foreground" and could not
+        // be forced past it, so BroadcastQueue kept refusing CONNECTION_STATE_CHANGE with every
+        // permission granted. requestConnectionInfo() is a plain call with no appop, so a timer
+        // poll observes the join the broadcast never reported. Without it the sink is blind in
+        // exactly the case a user reports as "it shows up but won't connect".
+        assertTrue(wifiDirect.contains("fun pollConnectionState"))
+        assertTrue(wifiDirect.contains("CONNECTION_POLL_MS"))
+        assertTrue(wifiDirect.contains("connectionPollInFlight"))
+        assertTrue(wifiDirect.contains("mainHandler.postDelayed({ if (isStarted) pollConnectionState() }"))
     }
 
     @Test

@@ -10,7 +10,18 @@ import java.io.OutputStream
 import java.net.Socket
 import java.nio.charset.StandardCharsets
 
-/** Wi-Fi Display RTSP session handler for the Sink side. */
+/**
+ * Wi-Fi Display RTSP session handler for the Sink side.
+ *
+ * The Sink is the RTSP *server*: the Source dials the control port advertised in the WFD
+ * information element and drives the M3 exchange with requests. Every method therefore gets a
+ * `RTSP/1.0 200 OK` reply, and the Sink's own RTP port travels back in the `Transport:` header of
+ * the SETUP response — that header is the one place a Source is guaranteed to read it from.
+ *
+ * Sending SETUP or PLAY as outgoing *requests* would make us a second client. The Source is not
+ * listening for one, so both peers would just wait on each other until the Source's RTSP timeout
+ * tears the group down. Two servers is a deadlock, not a protocol.
+ */
 class WfdSessionHandler(
     private val context: Context,
     private val socket: Socket,
@@ -24,8 +35,7 @@ class WfdSessionHandler(
     private var presentationUrl = ""
     private var streamStopNotified = false
     private var optionsSent = false
-    private var setupCseq = -1
-    private var playCseq = -1
+    private var setupDone = false
     private var streamStarted = false
     private var sourceIdentity = ""
 
@@ -42,13 +52,16 @@ class WfdSessionHandler(
 
         /** LPCM is mandatory; AAC-LC is also supported by our TS audio path. */
         private const val AUDIO_CODECS = "LPCM 00000003 00, AAC 0000000F 00"
+
+        private const val PUBLIC_METHODS =
+            "Public: org.wfa.wfd1.0, DESCRIBE, GET_PARAMETER, SET_PARAMETER, SETUP, PLAY, PAUSE, TEARDOWN"
     }
 
     fun handleSession() {
         try {
             Timber.i(
                 "WFD RTSP session started with source ${socket.inetAddress.hostAddress}:${socket.port} " +
-                    "RTP=$rtpPort RTCP=${rtpPort + 1}"
+                    "RTP=$rtpPort RTCP=${rtcpPort()}"
             )
             while (!socket.isClosed) {
                 val msg = readMessage() ?: break
@@ -111,12 +124,13 @@ class WfdSessionHandler(
         val cseq = header(msg, "CSeq") ?: "0"
         when (method) {
             "OPTIONS" -> {
-                sendOk(cseq, "Public: org.wfa.wfd1.0, GET_PARAMETER, SET_PARAMETER\r\n")
+                sendOk(cseq, PUBLIC_METHODS)
                 if (!optionsSent) {
                     optionsSent = true
                     sendOptions()
                 }
             }
+            "DESCRIBE" -> sendDescribe(cseq)
             "GET_PARAMETER" -> {
                 val requested = requestedParameters(msg)
                 if (requested.isEmpty()) sendOk(cseq) else sendCapabilities(cseq, requested)
@@ -134,59 +148,103 @@ class WfdSessionHandler(
                     logNegotiatedVideoMode(it)
                 }
                 param(msg, "wfd_audio_codecs")?.let { Timber.i("WFD: source selected audio codec = $it") }
-
-                sendOk(cseq)
-                when {
-                    msg.contains("wfd_trigger_method: SETUP", ignoreCase = true) -> sendSetup()
-                    msg.contains("wfd_trigger_method: PLAY", ignoreCase = true) -> sendPlay()
-                    msg.contains("wfd_trigger_method: TEARDOWN", ignoreCase = true) -> close()
+                param(msg, "wfd_trigger_method")?.let {
+                    Timber.i("WFD: source selected trigger method = $it")
                 }
+
+                // The Source drives the trigger itself: SETUP is the WFA WFD default and PLAY-only
+                // Sources skip straight to it. Either arrives as its own method.
+                sendOk(cseq)
             }
+            "SETUP" -> sendSetupResponse(cseq)
+            "PLAY" -> sendPlayResponse(cseq)
+            "PAUSE" -> sendOk(cseq)
             "TEARDOWN" -> {
                 sendOk(cseq)
                 close()
             }
-            "PAUSE", "PLAY" -> sendOk(cseq)
             else -> sendOk(cseq)
         }
     }
 
+    /**
+     * Reply to the Source's SETUP. `Transport:` carries our RTP/RTCP pair because that is the field
+     * every WFD Source parses for the receive port; the WFD parameters were already offered in M3.
+     */
+    private fun sendSetupResponse(cseq: String) {
+        if (sessionId.isBlank()) {
+            sessionId = "wfd-" + System.nanoTime().toString(16)
+        }
+        send(
+            "RTSP/1.0 200 OK\r\n" +
+                "CSeq: $cseq\r\n" +
+                "Session: $sessionId\r\n" +
+                "Transport: RTP/AVP/UDP;unicast;server_port=$rtpPort-${rtcpPort()}\r\n" +
+                "User-Agent: MiracastReceiver/1.0\r\n" +
+                "\r\n"
+        )
+        Timber.i("WFD: SETUP accepted session=$sessionId server_port=$rtpPort-${rtcpPort()}")
+        if (!setupDone) {
+            setupDone = true
+            onSessionEstablished?.invoke(sessionId)
+        }
+    }
+
+    /**
+     * Reply to the Source's PLAY. RTP was bound before M3 advertised the port, so this is only the
+     * go signal: report the stream live and bring up the UI.
+     */
+    private fun sendPlayResponse(cseq: String) {
+        if (sessionId.isBlank()) {
+            sessionId = "wfd-" + System.nanoTime().toString(16)
+        }
+        send(
+            "RTSP/1.0 200 OK\r\n" +
+                "CSeq: $cseq\r\n" +
+                "Session: $sessionId\r\n" +
+                "User-Agent: MiracastReceiver/1.0\r\n" +
+                "\r\n"
+        )
+        Timber.i("WFD: PLAY acknowledged; waiting for RTP on $rtpPort")
+        if (!streamStarted) {
+            streamStarted = true
+            onStreamStart?.invoke(rtpPort)
+            startPlayerActivity()
+        }
+    }
+
+    /** Some Sources send DESCRIBE instead of GET_PARAMETER to collect the WFD parameter set. */
+    private fun sendDescribe(cseq: String) {
+        val capabilities = capabilityValues()
+        val body = capabilities.entries.joinToString("\r\n") { "${it.key}: ${it.value}" } + "\r\n"
+        val bytes = body.toByteArray(StandardCharsets.UTF_8)
+        send(
+            "RTSP/1.0 200 OK\r\n" +
+                "CSeq: $cseq\r\n" +
+                "User-Agent: MiracastReceiver/1.0\r\n" +
+                "Content-Type: text/parameters\r\n" +
+                "Content-Length: ${bytes.size}\r\n" +
+                "\r\n" +
+                body
+        )
+        Timber.i("WFD: replied to DESCRIBE with ${capabilities.size} parameters")
+    }
+
+    /**
+     * We only ever send one request, the OPTIONS echo, so a response is ours if and only if its
+     * CSeq is the one we just issued. There is nothing to correlate SETUP or PLAY against: those
+     * are requests *from* the Source, never our own.
+     */
     private fun handleResponse(msg: String) {
         val status = Regex("^RTSP/1\\.0\\s+(\\d+)")
             .find(msg)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 0
         val cseq = header(msg, "CSeq")?.toIntOrNull() ?: -1
         if (status !in 200..299) {
             Timber.w("WFD: RTSP response failed status=$status cseq=$cseq")
-            if (cseq == setupCseq || cseq == playCseq) close()
+            if (cseq == outCseq) close()
             return
         }
-
-        when (cseq) {
-            setupCseq -> {
-                sessionId = header(msg, "Session")?.substringBefore(';')?.trim().orEmpty()
-                val transport = header(msg, "Transport")
-                if (sessionId.isBlank()) {
-                    Timber.w("WFD: SETUP response missing Session header; continuing legacy-compatible")
-                }
-                Timber.i(
-                    "WFD: SETUP accepted session=${sessionId.ifBlank { "legacy" }} " +
-                        "transport=${transport ?: "unknown"}"
-                )
-                onSessionEstablished?.invoke(sessionId.ifBlank { "legacy" })
-                setupCseq = -1
-                sendPlay()
-            }
-            playCseq -> {
-                playCseq = -1
-                if (!streamStarted) {
-                    streamStarted = true
-                    Timber.i("WFD: PLAY acknowledged; waiting for RTP on $rtpPort")
-                    onStreamStart?.invoke(rtpPort)
-                    startPlayerActivity()
-                }
-            }
-            else -> Timber.d("WFD: RTSP response acknowledged cseq=$cseq")
-        }
+        Timber.d("WFD: RTSP response acknowledged cseq=$cseq")
     }
 
     private fun sendOptions() {
@@ -195,34 +253,6 @@ class WfdSessionHandler(
             "OPTIONS * RTSP/1.0\r\n" +
                 "CSeq: $cseq\r\n" +
                 "Require: org.wfa.wfd1.0\r\n" +
-                "User-Agent: MiracastReceiver/1.0\r\n\r\n"
-        )
-    }
-
-    private fun sendSetup() {
-        if (presentationUrl.isEmpty()) {
-            presentationUrl = "rtsp://${socket.inetAddress.hostAddress}/wfd1.0/streamid=0"
-        }
-        setupCseq = ++outCseq
-        val rtcpPort = (rtpPort + 1).coerceAtMost(65535)
-        send(
-            "SETUP $presentationUrl RTSP/1.0\r\n" +
-                "CSeq: $setupCseq\r\n" +
-                "Transport: RTP/AVP/UDP;unicast;client_port=$rtpPort-$rtcpPort\r\n" +
-                "User-Agent: MiracastReceiver/1.0\r\n\r\n"
-        )
-    }
-
-    private fun sendPlay() {
-        if (presentationUrl.isEmpty()) {
-            presentationUrl = "rtsp://${socket.inetAddress.hostAddress}/wfd1.0/streamid=0"
-        }
-        playCseq = ++outCseq
-        val sessionHeader = if (sessionId.isNotBlank()) "Session: $sessionId\r\n" else ""
-        send(
-            "PLAY $presentationUrl RTSP/1.0\r\n" +
-                "CSeq: $playCseq\r\n" +
-                sessionHeader +
                 "User-Agent: MiracastReceiver/1.0\r\n\r\n"
         )
     }
@@ -261,8 +291,9 @@ class WfdSessionHandler(
         "wfd_video_formats" to VIDEO_FORMATS,
         "wfd_audio_codecs" to AUDIO_CODECS,
         "wfd_3d_video_formats" to "none",
-        // WFD M3 uses port1=0 for the sink's RTP capability; SETUP later carries the RTP/RTCP pair.
-        "wfd_client_rtp_ports" to "RTP/AVP/UDP;unicast $rtpPort 0 mode=play",
+        // The Sink is the receiver, so mode=recv; the SETUP Transport header carries the real pair.
+        "wfd_client_rtp_ports" to "RTP/AVP/UDP;unicast 0 $rtpPort mode=recv",
+        "wfd_trigger_method" to "SETUP",
         "wfd_content_protection" to "none",
         "wfd_display_edid" to "none",
         "wfd_coupled_sink" to "none",
@@ -281,10 +312,14 @@ class WfdSessionHandler(
         "microsoft_diagnostics_capability" to "none"
     )
 
-    private fun requestedParameters(msg: String): LinkedHashSet<String> {
+    /**
+     * The parameters a Source asked for. WFD Sources normally list them in the request body; a
+     * Source that sends `GET_PARAMETER *` with an empty body means "everything", and answering
+     * that with a bare 200 OK leaves it holding no capabilities to negotiate against.
+     */
+    private fun requestedParameters(msg: String): Set<String> {
         val body = msg.substringAfter("\r\n\r\n", "")
-        if (body.isBlank()) return linkedSetOf()
-        return body.lineSequence()
+        val named = body.lineSequence()
             .map { it.trim() }
             .filter { it.isNotBlank() && !it.contains(':') }
             .filter {
@@ -292,6 +327,14 @@ class WfdSessionHandler(
                 lower.startsWith("wfd_") || lower.startsWith("intel_") || lower.startsWith("microsoft_")
             }
             .toCollection(linkedSetOf())
+        if (named.isNotEmpty()) return named
+        return if (uri(msg).lowercase() == "*") capabilityValues().keys else linkedSetOf()
+    }
+
+    /** The request-target of the first line, so a wildcard `*` can be recognised. */
+    private fun uri(msg: String): String {
+        val parts = (msg.lineSequence().firstOrNull() ?: "").split(' ')
+        return if (parts.size > 1) parts[1] else ""
     }
 
     private fun observeSourceIdentity(msg: String) {
@@ -314,6 +357,8 @@ class WfdSessionHandler(
         }
         Timber.i("WFD: negotiated mode = $mode")
     }
+
+    private fun rtcpPort(): Int = (rtpPort + 1).coerceAtMost(65535)
 
     private fun header(msg: String, name: String): String? =
         Regex("(?i)^${Regex.escape(name)}:\\s*(.+)$", RegexOption.MULTILINE)

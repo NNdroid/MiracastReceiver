@@ -539,7 +539,12 @@ class WifiDirectManager(
                 }
             }
         }
-        runCatching { ContextCompat.registerReceiver(appContext, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED) }
+        // These actions are dispatched by the framework (system_server), not by our own UID. On
+        // Android 13 a NOT_EXPORTED context receiver only accepts broadcasts from the same UID, so
+        // it is refused and the Sink goes completely blind to group formation, connection changes
+        // and peer events — every topology decision in this class silently never runs.
+        runCatching { ContextCompat.registerReceiver(appContext, receiver, filter, ContextCompat.RECEIVER_EXPORTED) }
+            .onSuccess { Timber.i("Wi-Fi P2P event receiver registered") }
             .onFailure { receiver = null; Timber.w(it, "Unable to register P2P receiver") }
     }
 

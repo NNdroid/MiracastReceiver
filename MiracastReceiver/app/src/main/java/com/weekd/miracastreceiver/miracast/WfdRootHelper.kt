@@ -17,6 +17,35 @@ object WfdRootHelper {
     private const val GO_OWNER_INTENT = 15
 
     /**
+     * P2P supplicant configurations that carry the Group Owner intent. The stock spelling is
+     * `go_owner_intent`, but vendor builds ship `p2p_go_intent` with an explicit `=0`, and the
+     * binary strings confirm which key a given vendor actually honours.
+     */
+    private val P2P_SUPPLICANT_CONFIGS = listOf(
+        "/vendor/etc/wifi/p2p_supplicant_ssv.conf",
+        "/vendor/etc/wifi/p2p_supplicant_rtk.conf",
+        "/vendor/etc/wifi/p2p_supplicant_wcn.conf",
+        "/vendor/etc/wifi/p2p_supplicant.conf",
+        "/system/etc/wifi/p2p_supplicant.conf"
+    )
+
+    /** Vendor spellings of the intent key, as a sed alternation. */
+    private const val GO_INTENT_KEY_PATTERN = "p2p_go_intent|p2p_group_owner_intent|group_owner_intent"
+
+    /**
+     * When set, the supplicant refuses to create the `p2p0` group interface at all. Such a device
+     * cannot be a Group Owner no matter what its intent is, and a Source has nothing to attach to.
+     */
+    private const val NO_GROUP_IFACE_KEY = "p2p_no_group_iface"
+
+    /** `P2P_SET` parameter names, tried in order: stock first, then vendor spellings. */
+    private val GO_INTENT_SET_NAMES = listOf("go_int", "p2p_go_intent", "p2p_group_owner_intent", "group_owner_intent")
+
+    /** Magisk boot service that re-applies the config patch, because /vendor does not survive reboot. */
+    private const val MAGISK_GO_INTENT_SERVICE = "/data/adb/service.d/99-miracast-go-intent.sh"
+    private const val MAGISK_SERVICE_MARKER = "miracast-go-intent"
+
+    /**
      * Group identity used when the framework will not create the group. A Source joins through the
      * WSC group information carried in the G/O beacon, so these only need to be present and legal.
      */
@@ -361,15 +390,24 @@ object WfdRootHelper {
     @Volatile
     private var lastGroupOwnerIntentReadback: Int? = null
 
+    @Volatile
+    private var lastGroupOwnerIntentConfigReadback: String? = null
+
+    @Volatile
+    private var lastGroupOwnerIntentPatchAttempts: String = ""
+
     /**
-     * Raise the supplicant's Group Owner intent to the maximum. The WFD spec makes the Sink the
-     * Group Owner; a supplicant left at the default intent loses the GO negotiation against an
-     * Android Source, which asks for the lowest intent, and the session never comes up.
+     * Establish the Group Owner intent the WFD spec requires of a Sink, the maximum value. A
+     * supplicant left at 0 loses every GO negotiation against an Android Source, which asks for
+     * the lowest intent; the Source then becomes the sink and the mirror is routed to the phone,
+     * not to this device.
      *
-     * Returns true only when the intent is actually in force — acknowledged, or acknowledged with
-     * a read-back that could not be read. A read-back reporting a different value, or an
-     * unconfirmed reply, is reported as false so the caller can surface it instead of assuming
-     * the sink will win the negotiation.
+     * Two independent paths are tried, because vendors break either one: a rewrite of the read-
+     * only vendor configuration (attempted first, since it is the only setting that is both
+     * authoritative and durable) and a live `P2P_SET` against whatever control socket exists.
+     *
+     * Returns true only when the intent is demonstrably in force. A read-back that reports a
+     * different value never counts.
      */
     fun configureGroupOwnerIntent(context: Context): Boolean {
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -380,53 +418,211 @@ object WfdRootHelper {
         }
 
         val binaryPath = helperBinary(context)
-        if (binaryPath == null) {
-            lastGroupOwnerIntentConfigured = false
-            Timber.w("WFD: helper binary unavailable, group owner intent not configured")
-            return false
+
+        // Path 1: the vendor configuration, first. On this hardware the live control socket is not
+        // even stable — a probe that issued P2P_SET twice left p2p-dev-wlan0 absent for the rest
+        // of the run — so the on-disk intent is the setting that is both authoritative and durable.
+        val configApplied = applyGroupOwnerIntentToConfig()
+        if (configApplied) {
+            restartWifiForGroupOwnerIntent()
         }
 
-        val sockets = existingControlSockets().filter { kindOf(it) == SocketKind.P2P_DEV }
-        if (sockets.isEmpty()) {
-            lastGroupOwnerIntentConfigured = false
-            Timber.w("WFD: no p2p-dev control socket, group owner intent not set")
-            return false
-        }
-
+        // Path 2: a live set against whatever socket now exists. Stock supplicants call the
+        // parameter `go_int`; vendors rename it, so every spelling is tried. After a restart this
+        // also proves the new configuration was actually picked up.
         var acknowledged = false
         var readBack: Int? = null
-        for (socketPath in sockets) {
-            val exit = runAsRoot("${binaryPath} $socketPath \"P2P_SET go_int $GO_OWNER_INTENT\"").exitCode
-            when (exit) {
-                WFDCTL_OK -> {
-                    acknowledged = true
-                    readBack = groupOwnerIntentReadback(binaryPath, socketPath)
-                    if (readBack == GO_OWNER_INTENT) {
-                        Timber.i("WFD: group owner intent confirmed at $GO_OWNER_INTENT via $socketPath")
-                    } else {
-                        Timber.w("WFD: $socketPath accepted P2P_SET go_int but read-back reports $readBack")
+        if (binaryPath == null) {
+            Timber.w("WFD: helper binary unavailable, group owner intent not set live")
+        } else {
+            val sockets = existingControlSockets().filter { kindOf(it) == SocketKind.P2P_DEV }
+            if (sockets.isEmpty()) {
+                Timber.w("WFD: no p2p-dev control socket, group owner intent not set live")
+            } else {
+                for (socketPath in sockets) {
+                    for (name in GO_INTENT_SET_NAMES) {
+                        val exit = runAsRoot("${binaryPath} $socketPath \"P2P_SET $name $GO_OWNER_INTENT\"").exitCode
+                        when (exit) {
+                            WFDCTL_OK -> {
+                                acknowledged = true
+                                readBack = groupOwnerIntentReadback(binaryPath, socketPath)
+                                Timber.i(
+                                    "WFD: P2P_SET $name acknowledged on $socketPath " +
+                                        "(read-back=${readBack ?: "unreadable"})"
+                                )
+                            }
+                            WFDCTL_UNCONFIRMED -> Timber.w("WFD: P2P_SET $name on $socketPath never acknowledged")
+                            else -> Timber.d("WFD: $socketPath rejected P2P_SET $name")
+                        }
+                        if (readBack == GO_OWNER_INTENT) break
                     }
+                    if (readBack == GO_OWNER_INTENT) break
                 }
-                WFDCTL_UNCONFIRMED -> Timber.w("WFD: P2P_SET go_int sent to $socketPath but never acknowledged")
-                else -> Timber.w("WFD: $socketPath rejected P2P_SET go_int")
             }
-            if (readBack == GO_OWNER_INTENT) break
         }
 
         lastGroupOwnerIntentConfigured = acknowledged
         lastGroupOwnerIntentReadback = readBack
-        // A silence on P2P_GET is not proof the intent is wrong, so an acknowledged set with an
-        // unreadable probe still counts — but a read-back that reports a different value does not.
-        val effective = acknowledged && (readBack == null || readBack == GO_OWNER_INTENT)
+        val effective = configApplied || (acknowledged && (readBack == null || readBack == GO_OWNER_INTENT))
         if (!effective) {
             Timber.w(
-                "WFD: group owner intent not established (acknowledged=$acknowledged readback=$readBack); " +
-                    "the sink cannot win GO negotiation and the session will never come up. Run " +
-                    "\"P2P_SET go_int $GO_OWNER_INTENT\" manually on p2p-dev-wlan0 or add " +
-                    "group_owner_intent=$GO_OWNER_INTENT to the supplicant configuration."
+                "WFD: group owner intent not established (live acknowledged=$acknowledged readback=$readBack " +
+                    "configApplied=$configApplied); the sink cannot win GO negotiation and the mirror would be " +
+                    "routed to the Source's device instead of this one."
             )
         }
         return effective
+    }
+
+    /**
+     * Rewrite the intent into the vendor's P2P supplicant configuration.
+     *
+     * `p2p_go_intent` is the key these builds use, at 0, and `/vendor` is mounted read-only, so
+     * both must be handled. `p2p_no_group_iface=1` is patched away too: with it set the supplicant
+     * never creates `p2p0`, so no intent value can make this device a Group Owner at all and a
+     * Source has nothing to attach to.
+     *
+     * On these vendor images `/vendor` is also 100% full, which makes the rewrite fail outright.
+     * That is not fatal — the live `P2P_SET` in the caller covers it — but it is what the returned
+     * value tells the caller, and the diagnostics page reports the free-space figure.
+     *
+     * The same body is installed as a Magisk boot service, because the vendor image restores the
+     * file on every reboot and would silently undo the fix.
+     */
+    private fun applyGroupOwnerIntentToConfig(): Boolean {
+        val script = goIntentConfigPatchScript()
+        val scriptPath = "/data/local/tmp/miracast_go_intent.sh"
+        val install = runAsRoot(
+            "cat > $scriptPath <<'MIRACAST_EOF'\n$script\nMIRACAST_EOF\nchmod 755 $scriptPath"
+        )
+        if (!install.success) {
+            Timber.w("WFD: cannot write Group Owner intent patch (${install.output.take(120)})")
+            return false
+        }
+        installBootPersistence(script)
+
+        val attempts = runAsRootCapture("sh $scriptPath") ?: ""
+        lastGroupOwnerIntentPatchAttempts = attempts.replace("\n", " ")
+        if (attempts.isNotBlank()) Timber.i("WFD: GO intent patch attempts: $attempts")
+
+        val readback = runAsRootOutput(
+            "grep -hE '^(${GO_INTENT_KEY_PATTERN}|${NO_GROUP_IFACE_KEY})=' " +
+                P2P_SUPPLICANT_CONFIGS.joinToString(" ") + " 2>/dev/null"
+        )
+        lastGroupOwnerIntentConfigReadback = readback
+        val flat = readback?.replace("\n", " | ") ?: "unreadable"
+        Timber.i("WFD: vendor wifi config after patch: $flat")
+
+        if (!attempts.contains("PATCHED")) {
+            val free = runAsRootOutput("df -B1 /vendor 2>/dev/null | awk 'NR==2{print $4}'")
+            Timber.w(
+                "WFD: vendor wifi config could not be rewritten (attempts='${attempts.take(120)}' " +
+                    "/vendor free=${free ?: "unknown"} B); the Group Owner intent must come from a live " +
+                    "P2P_SET instead, which does not survive a reboot"
+            )
+        }
+
+        return readback != null && Regex(
+            "^(?:$GO_INTENT_KEY_PATTERN)=\\s*$GO_OWNER_INTENT",
+            RegexOption.MULTILINE
+        ).containsMatchIn(readback)
+    }
+
+    /**
+     * The shell body that rewrites the intent. Written as a regular string rather than a raw one:
+     * a raw string does not let `$` be escaped, and `f` is a shell variable that Kotlin would
+     * otherwise try to resolve.
+     *
+     * Never edit the file in place. On a vendor image the partition is 100% full, so `sed` with
+     * its in-place flag creates its temp file, the content write fails with ENOSPC, and the
+     * rename still goes through — the file ends up zero bytes and the original content is gone
+     * for good. The rewrite below therefore stages into a temp file, refuses to rename unless
+     * that temp provably carries both new keys, and leaves the original untouched on any failure.
+     */
+    private fun goIntentConfigPatchScript(): String =
+        "mount -o remount,rw /vendor 2>/dev/null\n" +
+            "for f in ${P2P_SUPPLICANT_CONFIGS.joinToString(" ")}; do\n" +
+            "    [ -f \"\$f\" ] || continue\n" +
+            "    t=\"\$f.mr.\$\$\"\n" +
+            "    rm -f \"\$f.mr.\"* 2>/dev/null\n" +
+            "    {\n" +
+            "        grep -vE \"^(${GO_INTENT_KEY_PATTERN}|${NO_GROUP_IFACE_KEY})=\" \"\$f\" 2>/dev/null\n" +
+            "        echo 'p2p_go_intent=${GO_OWNER_INTENT}'\n" +
+            "        echo '${NO_GROUP_IFACE_KEY}=0'\n" +
+            "    } > \"\$t\" 2>/dev/null\n" +
+            "    if grep -q \"^p2p_go_intent=${GO_OWNER_INTENT}\$\" \"\$t\" 2>/dev/null && " +
+                "grep -q \"^${NO_GROUP_IFACE_KEY}=0\$\" \"\$t\" 2>/dev/null; then\n" +
+            "        if mv -f \"\$t\" \"\$f\" 2>/dev/null; then echo \"PATCHED \$f\"; " +
+                "else echo \"RENAME-FAILED \$f\"; rm -f \"\$t\" 2>/dev/null; fi\n" +
+            "    else\n" +
+            "        rm -f \"\$t\" 2>/dev/null\n" +
+            "        echo \"UNWRITABLE \$f\"\n" +
+            "    fi\n" +
+            "done\n" +
+            "exit 0\n"
+
+    /**
+     * Install the patch as a Magisk boot service. `/vendor` is restored from the vendor image on
+     * every boot, so without this the intent returns to 0 and the next boot undoes the fix.
+     */
+    private fun installBootPersistence(script: String) {
+        if (runAsRoot("test -d /data/adb/service.d").exitCode != 0) {
+            Timber.d("WFD: no Magisk service.d — Group Owner intent patch is not persisted across reboot")
+            return
+        }
+        val body = "#!/system/bin/sh\n" +
+            "# $MAGISK_SERVICE_MARKER — generated by Miracast Receiver.\n" +
+            "# Re-applies the Group Owner intent to the vendor wifi configuration, which the\n" +
+            "# vendor image resets to 0 on every boot.\n" +
+            script
+        runAsRoot(
+            "cat > $MAGISK_GO_INTENT_SERVICE <<'MIRACAST_EOF'\n$body\nMIRACAST_EOF\n" +
+                "chmod 755 $MAGISK_GO_INTENT_SERVICE"
+        ).let {
+            if (it.success) Timber.i("WFD: boot persistence installed at $MAGISK_GO_INTENT_SERVICE")
+            else Timber.w("WFD: could not install boot persistence: ${it.output.take(120)}")
+        }
+    }
+
+    /**
+     * The intent is read once at supplicant startup, so the config patch is inert until the wifi
+     * stack cycles. Skipped while a group is up: tearing the stack down mid-session would drop the
+     * Source that is attached, which is worse than deferring the change until the group drops.
+     */
+    private fun restartWifiForGroupOwnerIntent() {
+        if (groupInterfaceExists()) {
+            Timber.i("WFD: group is up — deferring the wifi restart so the attached Source is not dropped")
+            return
+        }
+        // `set-wifi-enabled` takes the words enabled|disabled. Boolean arguments are rejected with
+        // an IllegalArgumentException, so the whole cycle was a silent no-op and the intent never
+        // took effect; the init property alone is not enough either, because wificond recreates the
+        // P2P interface itself and drops a bare supplicant restart.
+        runAsRoot(
+            "setprop ctl.restart wpa_supplicant 2>/dev/null\n" +
+                "sleep 2\n" +
+                "cmd wifi set-p2p-enabled disabled 2>/dev/null || true\n" +
+                "sleep 1\n" +
+                "cmd wifi set-p2p-enabled enabled 2>/dev/null || true\n" +
+                "sleep 3\n" +
+                "cmd wifi set-wifi-enabled disabled 2>/dev/null || true\n" +
+                "sleep 3\n" +
+                "cmd wifi set-wifi-enabled enabled 2>/dev/null || true\n" +
+                "sleep 5"
+        )
+        val ip = runAsRootOutput("ip -4 addr show wlan0 | grep 'inet '")
+        val sockets = existingControlSockets().filter { kindOf(it) == SocketKind.P2P_DEV }
+        Timber.i(
+            "WFD: wifi cycle done for Group Owner intent " +
+                "(wlan0=${ip ?: "no address"} p2p-dev sockets=${sockets.size})"
+        )
+        if (sockets.isEmpty()) {
+            Timber.w(
+                "WFD: no p2p-dev control socket after the wifi cycle; the vendor supplicant did not " +
+                    "recreate the P2P interface, so no live P2P_SET and no Group Owner negotiation are " +
+                    "possible until wifi is cycled again"
+            )
+        }
     }
 
     /**
@@ -594,6 +790,12 @@ object WfdRootHelper {
         out["lastVerified"] = advertisementStatus().verified.toString()
         out["groupOwnerIntentConfigured"] = lastGroupOwnerIntentConfigured.toString()
         out["groupOwnerIntentReadback"] = (lastGroupOwnerIntentReadback ?: "unread").toString()
+        out["groupOwnerIntentConfig"] = lastGroupOwnerIntentConfigReadback
+            ?: "not patched"
+        out["groupOwnerIntentPatchAttempts"] = lastGroupOwnerIntentPatchAttempts.ifBlank { "not run" }
+            ?: "not patched"
+        out["groupOwnerIntentBootPersisted"] =
+            runAsRoot("test -f $MAGISK_GO_INTENT_SERVICE").success.toString()
         out["groupFormation"] = lastGroupFormationDetail
 
         if (binaryPath != null) {

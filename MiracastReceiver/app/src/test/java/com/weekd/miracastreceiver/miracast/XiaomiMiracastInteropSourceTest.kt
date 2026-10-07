@@ -107,8 +107,66 @@ class XiaomiMiracastInteropSourceTest {
     fun groupOwnerIntentIsRaisedSoTheSinkWinsGoNegotiation() {
         assertTrue(rootHelper.contains("GO_OWNER_INTENT"))
         assertTrue(rootHelper.contains("fun configureGroupOwnerIntent"))
-        assertTrue(rootHelper.contains("P2P_SET go_int"))
+        // The stock parameter name is refused outright on vendor builds, so every spelling is
+        // tried: a sink stuck at intent 0 loses to the Source and the mirror goes to the phone.
+        assertTrue(rootHelper.contains("GO_INTENT_SET_NAMES"))
+        assertTrue(rootHelper.contains("P2P_SET"))
         assertTrue(rootHelper.contains("groupOwnerIntentConfigured"))
+    }
+
+    @Test
+    fun groupOwnerIntentIsRewrittenIntoTheVendorConfigWhenTheLiveSetIsRefused() {
+        // These supplicants reject every P2P_SET intent variant and bake 0 into a read-only
+        // /vendor file, so the intent can only be changed on disk. `p2p_no_group_iface` is
+        // patched away too, because with it set the device never creates p2p0 and no intent
+        // value can make it a Group Owner at all.
+        assertTrue(rootHelper.contains("P2P_SUPPLICANT_CONFIGS"))
+        assertTrue(rootHelper.contains("p2p_supplicant_ssv.conf"))
+        assertTrue(rootHelper.contains("p2p_go_intent"))
+        assertTrue(rootHelper.contains("NO_GROUP_IFACE_KEY"))
+        assertTrue(rootHelper.contains("mount -o remount,rw /vendor"))
+        assertTrue(rootHelper.contains("fun applyGroupOwnerIntentToConfig"))
+        assertTrue(rootHelper.contains("fun restartWifiForGroupOwnerIntent"))
+    }
+
+    @Test
+    fun configRewriteStagesToATempFileBecauseSedInPlaceDestroysFilesOnAFullPartition() {
+        // The vendor image ships /vendor at 100%. sed -i there creates its temp file, the content
+        // write fails with ENOSPC, and the rename still succeeds — so the file is left at zero
+        // bytes and the original wifi configuration is gone for good. The patch must therefore
+        // stage, verify the staged file actually carries both new keys, and only then rename.
+        assertTrue(rootHelper.contains("goIntentConfigPatchScript"))
+        assertTrue(rootHelper.contains("grep -vE"))
+        assertTrue(rootHelper.contains("echo 'p2p_go_intent="))
+        assertTrue(rootHelper.contains(".mr."))
+        assertTrue(rootHelper.contains("mv -f"))
+        assertTrue(rootHelper.contains("UNWRITABLE"))
+        assertFalse(rootHelper.contains("sed -i"))
+    }
+
+    @Test
+    fun wifiCycleUsesTheArgumentsThisSupplicantActuallyAccepts() {
+        // `cmd wifi set-wifi-enabled` takes the words enabled|disabled. Boolean arguments are
+        // rejected with an IllegalArgumentException, so a cycle written with true/false never ran
+        // and the patched intent never took effect. The P2P interface is cycled first, because
+        // that is what Group Owner negotiation needs and wificond does not recreate it from a
+        // bare supplicant restart.
+        assertTrue(rootHelper.contains("set-p2p-enabled"))
+        assertTrue(rootHelper.contains("set-wifi-enabled disabled"))
+        assertTrue(rootHelper.contains("set-wifi-enabled enabled"))
+        assertFalse(rootHelper.contains("set-wifi-enabled false"))
+        assertFalse(rootHelper.contains("set-wifi-enabled true"))
+    }
+
+    @Test
+    fun groupOwnerIntentSurvivesRebootThroughABootService() {
+        // The vendor image restores the wifi configuration on every boot, silently undoing the
+        // patch, so the rewrite has to re-run at boot or the sink regresses to intent 0.
+        assertTrue(rootHelper.contains("fun installBootPersistence"))
+        assertTrue(rootHelper.contains("MAGISK_GO_INTENT_SERVICE"))
+        assertTrue(rootHelper.contains("/data/adb/service.d"))
+        assertTrue(rootHelper.contains("MAGISK_SERVICE_MARKER"))
+        assertTrue(rootHelper.contains("groupOwnerIntentBootPersisted"))
     }
 
     @Test
@@ -179,14 +237,24 @@ class XiaomiMiracastInteropSourceTest {
     }
 
     @Test
-    fun sourceControlPortAndBothTopologiesRemainSupported() {
+    fun sinkListensForTheSourceInsteadOfScanningForIt() {
+        // The Source dials the control port published in the WFD information element. A Sink that
+        // scans the P2P subnet answers connections nobody made and never accepts the one that was
+        // made, so the Source waits out its RTSP timeout and drops the group.
+        assertTrue(server.contains("ServerSocket"))
+        assertTrue(server.contains("acceptSource()"))
+        assertTrue(server.contains("ensureListener()"))
+        assertTrue(server.contains("listeningPort()"))
+        assertFalse(server.contains("p2pSubnetPrefix"))
+        assertFalse(server.contains("tryConnect"))
+        assertFalse(server.contains("dialSource"))
+    }
+
+    @Test
+    fun sourceOwnedGroupIsStillDetectedForDiagnostics() {
         assertTrue(wifiDirect.contains("getControlPort"))
         assertTrue(wifiDirect.contains("source-group-owner"))
-        assertTrue(server.contains("WfdSourceHint.snapshot()"))
-        assertTrue(server.contains("hint.controlPort"))
-        assertTrue(server.contains("hint.ipAddress"))
-        assertTrue(server.contains("p2pSubnetPrefix()"))
-        assertTrue(server.contains("discoverSourceControlPort"))
+        assertTrue(server.contains("WfdSourceHint.update"))
     }
 
     @Test
@@ -217,10 +285,17 @@ class XiaomiMiracastInteropSourceTest {
     }
 
     @Test
-    fun setupAndPlayResponsesAreMatchedByCseq() {
-        assertTrue(session.contains("setupCseq"))
-        assertTrue(session.contains("playCseq"))
-        assertTrue(session.contains("when (cseq)"))
+    fun setupAndPlayAreAnsweredAsAServerInsteadOfSentAsRequests() {
+        // The Source drives the exchange. Answering its SETUP with a Session and a Transport that
+        // carries our RTP port is what starts the stream; sending SETUP as an outgoing request
+        // leaves both peers waiting for each other until the Source's timeout drops the group.
+        assertTrue(session.contains("sendSetupResponse"))
+        assertTrue(session.contains("sendPlayResponse"))
+        assertTrue(session.contains("\"SETUP\" -> sendSetupResponse(cseq)"))
+        assertTrue(session.contains("\"PLAY\" -> sendPlayResponse(cseq)"))
+        assertTrue(session.contains("server_port=\$rtpPort-"))
         assertTrue(session.contains("PLAY acknowledged; waiting for RTP"))
+        assertFalse(session.contains("setupCseq"))
+        assertFalse(session.contains("playCseq"))
     }
 }

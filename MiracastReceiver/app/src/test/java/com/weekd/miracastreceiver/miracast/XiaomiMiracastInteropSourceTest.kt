@@ -264,6 +264,33 @@ class XiaomiMiracastInteropSourceTest {
     }
 
     @Test
+    fun aGroupOwnerFrequencyRestrictionCannotOverrideTheGroupOwnerIntent() {
+        // The vendor ships p2p_no_go_freq=5170-5740 in the read-only P2P overlay. On a restricted
+        // channel the supplicant declines the Group Owner role before negotiation, so even
+        // p2p_go_intent=15 loses: the source wins and this sink comes out as GroupClient on a
+        // network whose owner is the other side, so nothing can ever reach RTSP on 7236. Verified
+        // live as groupRole=GroupClient on 5180, the same channel the station itself sat on.
+        assertTrue(rootHelper.contains("NO_GO_FREQ_KEY"))
+        assertTrue(rootHelper.contains("p2p_no_go_freq"))
+        assertTrue(rootHelper.contains("echo '\${NO_GO_FREQ_KEY}='"))
+        // A non-empty value must count as wrong, otherwise a keep-alive tick reads the file as
+        // already correct and the restriction is never cleared at all.
+        assertTrue(rootHelper.contains("\${NO_GO_FREQ_KEY}=[^[:space:]]"))
+        // The wifi service re-merges the vendor overlay over the /data copy at every HAL start, so
+        // patching only /data is undone by the first wifi cycle — which is what kept happening.
+        // /vendor is read-only, so the vendor file is hidden with a bind mount instead, and that
+        // has to be re-applied on boot because /vendor is remounted from the vendor image.
+        assertTrue(rootHelper.contains("VENDOR_P2P_OVERLAY"))
+        assertTrue(rootHelper.contains("PATCHED_P2P_OVERLAY"))
+        assertTrue(rootHelper.contains("mount --bind"))
+        assertTrue(rootHelper.contains("MAGISK_POST_FS_DATA_OVERLAY"))
+        assertTrue(rootHelper.contains("post-fs-data.d"))
+        assertTrue(rootHelper.contains("fun installP2pOverlayBindMount"))
+        // The mount has to land before the wifi cycle that makes the new value take effect.
+        assertTrue(rootHelper.contains("installP2pOverlayBindMount()"))
+    }
+
+    @Test
     fun configRewriteStagesToATempFileBecauseSedInPlaceDestroysFilesOnAFullPartition() {
         // The vendor image ships /vendor at 100%. sed -i there creates its temp file, the content
         // write fails with ENOSPC, and the rename still succeeds — so the file is left at zero

@@ -54,6 +54,26 @@ object WfdRootHelper {
      */
     private const val NO_GROUP_IFACE_KEY = "p2p_no_group_iface"
 
+    /**
+     * When set, the supplicant refuses to act as Group Owner on the listed channels. A high
+     * `p2p_go_intent` cannot override it: on a restricted channel the supplicant declines the role
+     * before negotiation, the Source wins, and this sink ends up as GroupClient on a network whose
+     * Group Owner is the other side. RTSP on 7236 then has nobody who can reach it, and a Source
+     * stalls in "connecting" forever. The vendor ships 5170-5740, which is exactly the band the
+     * station itself sits on, so every group attempt landed there and lost.
+     */
+    private const val NO_GO_FREQ_KEY = "p2p_no_go_freq"
+
+    /**
+     * The vendor overlay that seeds the merged P2P config. /vendor is read-only and the wifi service
+     * re-merges this file over /data at every HAL start, so a patch that only touches the merged
+     * copy is undone the first time wifi cycles. Bind-mounting over the vendor file instead is what
+     * makes the clear stick.
+     */
+    private const val VENDOR_P2P_OVERLAY = "/vendor/etc/wifi/p2p_supplicant_overlay.conf"
+    private const val PATCHED_P2P_OVERLAY = "/data/adb/service.d/p2p_supplicant_overlay.conf"
+    private const val MAGISK_POST_FS_DATA_OVERLAY = "/data/adb/post-fs-data.d/zz-miracast-p2p-overlay.sh"
+
     /** `P2P_SET` parameter names, tried in order: stock first, then vendor spellings. */
     private val GO_INTENT_SET_NAMES = listOf("go_int", "p2p_go_intent", "p2p_group_owner_intent", "group_owner_intent")
 
@@ -692,7 +712,7 @@ object WfdRootHelper {
         if (attempts.isNotBlank()) Timber.i("WFD: GO intent patch attempts: $attempts")
 
         val readback = runAsRootQuery(
-            "grep -hE '^(${GO_INTENT_KEY_PATTERN}|${NO_GROUP_IFACE_KEY})=' " +
+            "grep -hE '^(${GO_INTENT_KEY_PATTERN}|${NO_GROUP_IFACE_KEY}|${NO_GO_FREQ_KEY})=' " +
                 P2P_SUPPLICANT_CONFIGS.joinToString(" ") + " 2>/dev/null"
         )
         lastGroupOwnerIntentConfigReadback = readback
@@ -754,7 +774,8 @@ object WfdRootHelper {
             "    # Already correct: the keep-alive re-runs this script every tick, and a rename\n" +
             "    # with identical content still turns over the inode and needs nothing else. Skip.\n" +
             "    if grep -q \"^p2p_go_intent=${GO_OWNER_INTENT}\\$\" \"\$f\" 2>/dev/null && " +
-                "! grep -q \"^${NO_GROUP_IFACE_KEY}=1\\$\" \"\$f\" 2>/dev/null; then\n" +
+                "! grep -q \"^${NO_GROUP_IFACE_KEY}=1\\$\" \"\$f\" 2>/dev/null && " +
+                "! grep -qE \"^${NO_GO_FREQ_KEY}=[^[:space:]]\" \"\$f\" 2>/dev/null; then\n" +
             "        echo \"OK \$f\"\n" +
             "        continue\n" +
             "    fi\n" +
@@ -763,12 +784,14 @@ object WfdRootHelper {
             "    own=\"$(stat -c '%U:%G' \"\$f\" 2>/dev/null)\"\n" +
             "    mode=\"$(stat -c '%a' \"\$f\" 2>/dev/null)\"\n" +
             "    {\n" +
-            "        grep -vE \"^(${GO_INTENT_KEY_PATTERN}|${NO_GROUP_IFACE_KEY})=\" \"\$f\" 2>/dev/null\n" +
+            "        grep -vE \"^(${GO_INTENT_KEY_PATTERN}|${NO_GROUP_IFACE_KEY}|${NO_GO_FREQ_KEY})=\" \"\$f\" 2>/dev/null\n" +
             "        echo 'p2p_go_intent=${GO_OWNER_INTENT}'\n" +
             "        echo '${NO_GROUP_IFACE_KEY}=0'\n" +
+            "        echo '${NO_GO_FREQ_KEY}='\n" +
             "    } > \"\$t\" 2>/dev/null\n" +
             "    if grep -q \"^p2p_go_intent=${GO_OWNER_INTENT}\\$\" \"\$t\" 2>/dev/null && " +
-                "grep -q \"^${NO_GROUP_IFACE_KEY}=0\\$\" \"\$t\" 2>/dev/null; then\n" +
+                "grep -q \"^${NO_GROUP_IFACE_KEY}=0\\$\" \"\$t\" 2>/dev/null && " +
+                "! grep -qE \"^${NO_GO_FREQ_KEY}=[^[:space:]]\" \"\$t\" 2>/dev/null; then\n" +
             "        if mv -f \"\$t\" \"\$f\" 2>/dev/null; then\n" +
             "            # The supplicant runs as wifi with update_config=1, so it has to keep being\n" +
             "            # able to write this file. A root rename makes it root:root, after which the\n" +
@@ -828,6 +851,67 @@ object WfdRootHelper {
         ).let {
             if (it.success) Timber.i("WFD: boot persistence installed at $MAGISK_GO_INTENT_SERVICE")
             else Timber.w("WFD: could not install boot persistence: ${it.output.take(120)}")
+        }
+        installP2pOverlayBindMount()
+    }
+
+    /**
+     * The shell body that clears the vendor's Group Owner frequency restriction and mounts the
+     * result over the read-only vendor overlay. Shared between the live call and the boot script
+     * so the two cannot drift.
+     */
+    private fun p2pOverlayPatchBody(): String =
+        "if [ -r \"$VENDOR_P2P_OVERLAY\" ] && " +
+            "grep -qE \"^${NO_GO_FREQ_KEY}=[[:space:]]*[^[:space:]]\" \"$VENDOR_P2P_OVERLAY\"; then\n" +
+            "    grep -vE \"^${NO_GO_FREQ_KEY}=\" \"$VENDOR_P2P_OVERLAY\" > \"$PATCHED_P2P_OVERLAY\"\n" +
+            "    echo \"${NO_GO_FREQ_KEY}=\" >> \"$PATCHED_P2P_OVERLAY\"\n" +
+            "    chmod 644 \"$PATCHED_P2P_OVERLAY\"\n" +
+            "fi\n" +
+            "[ -s \"$PATCHED_P2P_OVERLAY\" ] || { echo \"NO-PATCHED\"; exit 0; }\n" +
+            "umount \"$VENDOR_P2P_OVERLAY\" 2>/dev/null\n" +
+            "mount --bind \"$PATCHED_P2P_OVERLAY\" \"$VENDOR_P2P_OVERLAY\" 2>&1\n" +
+            "if mount | grep -q \"on $VENDOR_P2P_OVERLAY \"; then echo BOUND; else echo NOT-BOUND; fi\n"
+
+    /**
+     * Bind-mount a patched copy of the vendor P2P overlay over the read-only original.
+     *
+     * The wifi service merges this overlay over the writable /data config at every HAL start, and
+     * the vendor ships `p2p_no_go_freq=5170-5740` in it. Patching only the /data copy is undone
+     * the first time wifi cycles — which is exactly how this sink kept losing Group Owner
+     * negotiation on 5180 and coming out the other side as GroupClient. /vendor is read-only, so
+     * the vendor file has to be hidden with a bind mount, and it has to be re-done on every boot
+     * because /vendor is remounted from the vendor image.
+     *
+     * The boot half runs from `post-fs-data.d`, which fires before the wifi HAL is up — the merge
+     * that would otherwise read the restricted value has not happened yet.
+     */
+    private fun installP2pOverlayBindMount() {
+        if (runAsRoot("test -d /data/adb/post-fs-data.d").exitCode != 0) {
+            Timber.d("WFD: no Magisk post-fs-data.d — the ${NO_GO_FREQ_KEY} clear is not persisted")
+            return
+        }
+        runAsRoot(p2pOverlayPatchBody()).let {
+            when {
+                it.output.contains("BOUND") ->
+                    Timber.i("WFD: bound a ${NO_GO_FREQ_KEY}-free overlay over $VENDOR_P2P_OVERLAY")
+                it.output.contains("NO-PATCHED") ->
+                    Timber.d("WFD: $VENDOR_P2P_OVERLAY carries no ${NO_GO_FREQ_KEY} restriction")
+                else -> Timber.w("WFD: could not bind-mount the P2P overlay: ${it.output.take(140)}")
+            }
+        }
+        runAsRoot(
+            "cat > $MAGISK_POST_FS_DATA_OVERLAY <<'MIRACAST_EOF'\n" +
+                "#!/system/bin/sh\n" +
+                "# $MAGISK_SERVICE_MARKER — generated by Miracast Receiver.\n" +
+                "# Hide the vendor's $NO_GO_FREQ_KEY restriction before the wifi service merges the\n" +
+                "# overlay into the writable P2P config, so Group Owner negotiation is not voided on\n" +
+                "# the band the station itself sits on.\n" +
+                p2pOverlayPatchBody() +
+                "MIRACAST_EOF\n" +
+                "chmod 755 $MAGISK_POST_FS_DATA_OVERLAY"
+        ).let {
+            if (it.success) Timber.i("WFD: post-fs-data persistence installed at $MAGISK_POST_FS_DATA_OVERLAY")
+            else Timber.w("WFD: could not install post-fs-data persistence: ${it.output.take(140)}")
         }
     }
 

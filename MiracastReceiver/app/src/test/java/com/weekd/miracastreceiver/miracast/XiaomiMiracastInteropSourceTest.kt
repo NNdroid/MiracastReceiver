@@ -119,6 +119,56 @@ class XiaomiMiracastInteropSourceTest {
     }
 
     @Test
+    fun aStaleGroupSocketMustNotPretendTheGroupStillExists() {
+        // A vendor supplicant leaves the p2p-wlan0-0 control socket on disk after the group
+        // interface is gone. Counting that socket as a group made formSinkGroup() return "group
+        // already present" without sending a single formation command, so a rebooted sink
+        // advertised a WFD beacon with no group behind it and sources could list it but never
+        // connect. The interface list is the only thing that counts as proof.
+        assertTrue(
+            rootHelper.contains(
+                "internal fun groupInterfaceExists(): Boolean = groupInterfaceNames().isNotEmpty()"
+            )
+        )
+        assertTrue(rootHelper.contains("fun groupControlSocketPresent()"))
+        assertTrue(rootHelper.contains("the interface is gone"))
+    }
+
+    @Test
+    fun groupFormationTriesEveryCommandDialectTheSupplicantMayHave() {
+        // Stock Android answers GROUP_FORMATION; a Realtek/SSV p2p port answers UNKNOWN COMMAND
+        // to it and only accepts P2P_GROUP_ADD. Hardcoding one dialect is exactly how a sink
+        // silently never becomes Group Owner, so each dialect is tried and the interface list
+        // is the verdict.
+        assertTrue(rootHelper.contains("GROUP_FORMATION_COMMANDS"))
+        assertTrue(rootHelper.contains("\"GROUP_FORMATION '%s' '%s'\""))
+        assertTrue(rootHelper.contains("P2P_GROUP_ADD"))
+        assertTrue(rootHelper.contains("for (template in GROUP_FORMATION_COMMANDS)"))
+    }
+
+    @Test
+    fun theKeepAliveReformsADroppedGroupWithoutWaitingForAFrameworkEvent() {
+        // A supplicant restart removes the group interface and delivers no Group Owner message,
+        // so the keep-alive must notice the missing interface on its own.
+        assertTrue(rootHelper.contains("if (keepAliveReFormGroup || !hadGroup)"))
+    }
+
+    @Test
+    fun theGroupOwnerAddressIsAppliedWhenTheVendorNetdNeverDoes() {
+        // The framework registers the group and reports ownerIp=192.168.49.1, but a vendor netd
+        // leaves p2p-wlan0-0 with no IPv4 at all. The group is then a beacon with no network
+        // behind it: a Source can associate and still drop every RTSP packet at the first hop.
+        assertTrue(rootHelper.contains("SINK_GROUP_OWNER_IP = \"192.168.49.1\""))
+        assertTrue(rootHelper.contains("fun ensureGroupOwnerAddress()"))
+        assertTrue(rootHelper.contains("fun groupAddressOf(iface: String): String?"))
+        assertTrue(
+            rootHelper.contains("ip addr add \${SINK_GROUP_OWNER_IP}/\${SINK_GROUP_OWNER_PREFIX} dev")
+        )
+        assertTrue(rootHelper.contains("runCatching { ensureGroupOwnerAddress() }"))
+        assertTrue(rootHelper.contains("out[\"groupOwnerAddress\"]"))
+    }
+
+    @Test
     fun theWfdElementIsReinjectedIntoTheGroupOwnerBeaconAfterFormation() {
         // WFD_SUBELEM_SET reaches the air only from the interface that carries the beacon, and
         // p2p0 only exists once a group exists. Forming the group without re-injecting the IE
@@ -144,10 +194,24 @@ class XiaomiMiracastInteropSourceTest {
 
     @Test
     fun sinkDeclaresItsFullMiracastCapabilitySetInTheInformationElement() {
-        // Declaring only 1024x768 with no video capability makes strict sources drop the sink
-        // during connection setup even after the device is discovered.
-        assertTrue(rootHelper.contains("WFD_DEVICE_INFO = 0xCF1"))
-        assertFalse(rootHelper.contains("\"0011\""))
+        // Declaring no video capability makes strict sources drop the sink during connection
+        // setup even after the device is discovered. The field is assembled from named masks so
+        // a wrong bit layout cannot slip back in as a single magic number.
+        assertTrue(rootHelper.contains("WFD_DEVICE_TYPE_PRIMARY_SINK"))
+        assertTrue(rootHelper.contains("WFD_SESSION_AVAILABLE_BIT1 = 0x10"))
+        assertTrue(rootHelper.contains("WFD_VIDEO_CAPABILITY_720P60_1080P30"))
+        // The field must be assembled from named masks, not hardcoded, or a wrong bit layout can
+        // come back in as one opaque literal with no reviewer left to catch it.
+        assertFalse(rootHelper.contains("WFD_DEVICE_INFO = 0x"))
+        assertFalse(rootHelper.contains("subelemHex() = \""))
+    }
+
+    @Test
+    fun sessionAvailableUsesTheTwoBitEncodingAndroidItselfWrites() {
+        // WifiP2pWfdInfo defines session available across bits 4..5, not bit 0. A single-bit
+        // reading of this field is what produced a "reserved" session-available value.
+        assertTrue(rootHelper.contains("SESSION_AVAILABLE_BIT"))
+        assertTrue(rootHelper.contains("WFD_SESSION_AVAILABLE_MASK = 0x30"))
     }
 
     @Test
@@ -556,8 +620,32 @@ class XiaomiMiracastInteropSourceTest {
         assertTrue(rootHelper.contains("chmod \\\"\\\$mode\\\""))
         // And a file that is already correct is left alone, so a keep-alive tick is not a churn.
         assertTrue(rootHelper.contains("echo \\\"OK \\\$f\\\""))
-        // Boot persistence is installed only when a write really happened.
-        assertTrue(rootHelper.contains("installBootPersistence(script)"))
+        // Boot persistence is installed only when a write really happened, and the helper path
+        // travels with it so the script can keep the WFD element alive as root.
+        assertTrue(rootHelper.contains("installBootPersistence(script, binaryPath)"))
+    }
+
+    @Test
+    fun theBootServiceKeepsTheWfdElementAliveWithoutAnySuGrant() {
+        // The runtime keep-alive needs an su grant, and Magisk drops grants across reinstalls: a
+        // freshly installed build has a new uid and no policy entry, so every su call comes back
+        // "Permission denied" and the sink stops being a sink. A boot service needs no grant.
+        assertTrue(rootHelper.contains("BOOT_WFDCTL_PATH"))
+        assertTrue(rootHelper.contains("fun wfdAdvertiseBootBody()"))
+        assertTrue(rootHelper.contains("WFD_SUBELEM=\${subelemHex()}"))
+        assertTrue(rootHelper.contains("WFD_SUBELEM_SET 0 \\\$WFD_SUBELEM"))
+        // The loop must not block the boot service, or the script that starts the app service
+        // later in the same directory never gets to run.
+        assertTrue(rootHelper.contains("(\n"))
+        assertTrue(rootHelper.contains("exit 0"))
+        // The intent-patch body is written to end with `exit 0` because it is also run on its own
+        // at runtime. Appended after that, the advertisement would be dead code — verified on
+        // device, where the generated service advertised WFD nothing and the sink was invisible.
+        assertTrue(rootHelper.contains("removeSuffix(\"exit 0\")"))
+        // Same reasoning applies to the Group Owner address: the runtime path that assigns it is
+        // also grant-gated, so the boot loop carries it too.
+        assertTrue(rootHelper.contains("for gi in /sys/class/net/p2p-wlan0-*"))
+        assertTrue(rootHelper.contains("ip addr add \${SINK_GROUP_OWNER_IP}/\${SINK_GROUP_OWNER_PREFIX} dev"))
     }
 
     @Test

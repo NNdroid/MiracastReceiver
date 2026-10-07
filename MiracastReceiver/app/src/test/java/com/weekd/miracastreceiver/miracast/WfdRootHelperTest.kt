@@ -1,37 +1,81 @@
 package com.weekd.miracastreceiver.miracast
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WfdRootHelperTest {
     @Test
     fun `primary sink advertises Xiaomi compatible 7236 control port by default`() {
-        assertEquals("00060cf11c440032", WfdRootHelper.subelemHex())
+        assertEquals("00063b111c440032", WfdRootHelper.subelemHex())
     }
 
     @Test
     fun `device info can still encode an explicit control port`() {
-        assertEquals("00060cf11f900032", WfdRootHelper.subelemHex(8080))
+        assertEquals("00063b111f900032", WfdRootHelper.subelemHex(8080))
     }
 
     @Test
     fun `device info keeps the sink role and declares the full capability set`() {
-        // Layout of the WFD Device Information subelement value, bit 0 being the least significant:
-        //   0          session available
-        //   1..2       preferred HTP mode (0 = sink only)
-        //   3          maximum concurrent sessions bandwidth
-        //   4..6       supported HTP modes 1024x768 | 1280x720 | 1920x1080
-        //   7          U-APSD
-        //   8..9       graphics profile / level
-        //   10..11     video capability
+        // Layout of the WFD Device Information field, per android.net.wifi.p2p.WifiP2pWfdInfo,
+        // bit 0 being the least significant:
+        //   0..1       device type (1 = primary sink)
+        //   2          coupled sink support at source
+        //   3          coupled sink support at sink
+        //   4..5       session available (0x10 = available at the time of discovery)
+        //   6..7       preferred HTP mode (0 = sink only)
+        //   8..10      supported HTP modes
+        //   11         U-APSD
+        //   12..14     supported video capability
         val deviceInfo = WfdRootHelper.subelemHex().substring(4, 8).toInt(16)
-        assertEquals(0xCF1, deviceInfo)
-        assertEquals(1, deviceInfo and 0x1)
-        assertEquals(0, (deviceInfo shr 1) and 0x3)
-        assertEquals(0x7, (deviceInfo shr 4) and 0x7)
-        assertEquals(1, (deviceInfo shr 7) and 0x1)
-        assertEquals(3, (deviceInfo shr 10) and 0x3)
+        assertEquals(0x3B11, deviceInfo)
+        assertEquals(1, deviceInfo and 0x3)
+        assertEquals(0x10, deviceInfo and 0x30)
+        assertEquals(0, (deviceInfo shr 6) and 0x3)
+        assertEquals(0x3, (deviceInfo shr 8) and 0x7)
+        assertEquals(1, (deviceInfo shr 11) and 0x1)
+        assertEquals(3, (deviceInfo shr 12) and 0x7)
+    }
+
+    @Test
+    fun `session available is the two-bit field android writes and not the reserved pattern`() {
+        // 0xCF1 decoded bits 4..5 as 0b11, which the WFD spec reserves. Android's
+        // setSessionAvailable(true) writes 0x10 only, and a real source (Redmi 10X) advertises
+        // 0x0010. Asserting the exact two-bit value is what stops this regressing.
+        val deviceInfo = WfdRootHelper.subelemHex().substring(4, 8).toInt(16)
+        assertEquals(0x10, deviceInfo and 0x30)
+        assertNotEquals(0x30, deviceInfo and 0x30)
+    }
+
+    @Test
+    fun `video capability is advertised rather than zeroed`() {
+        // Zero in this field means "no supported video capability", which several sources read
+        // as "this sink cannot display anything" and refuse to open a session against.
+        val deviceInfo = WfdRootHelper.subelemHex().substring(4, 8).toInt(16)
+        assertTrue((deviceInfo shr 12) and 0x7 != 0)
+    }
+
+    @Test
+    fun `device info layout matches a real source's own advertisement`() {
+        // A Redmi 10X advertises wfd_dev_info=0x00101c440032. Its device-information field is
+        // 0x0010: device type 0 (source) with session available = 0x10. Reusing the same field
+        // arithmetic proves the layout in this file is the one real devices use.
+        val sourceDeviceInfo = 0x0010
+        assertEquals(0, sourceDeviceInfo and 0x3)
+        assertEquals(0x10, sourceDeviceInfo and 0x30)
+        assertEquals(sourceDeviceInfo and 0x30, WfdRootHelper.subelemHex().substring(4, 8).toInt(16) and 0x30)
+    }
+
+    @Test
+    fun `device info payload still round trips the control port and throughput`() {
+        val hex = WfdRootHelper.subelemHex()
+        assertEquals("00", hex.substring(0, 2))
+        assertEquals(6, hex.substring(2, 4).toInt(16))
+        assertEquals(7236, hex.substring(8, 12).toInt(16))
+        assertEquals(50, hex.substring(12, 16).toInt(16))
+        assertEquals(16, hex.length)
     }
 
     @Test

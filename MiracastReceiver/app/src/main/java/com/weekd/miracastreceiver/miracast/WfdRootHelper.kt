@@ -59,6 +59,12 @@ object WfdRootHelper {
 
     /** Magisk boot service that re-applies the config patch, because /vendor does not survive reboot. */
     private const val MAGISK_GO_INTENT_SERVICE = "/data/adb/service.d/99-miracast-go-intent.sh"
+
+    /**
+     * Fixed home for the helper that the boot script uses. The packaged copy lives under a hash
+     * directory the platform changes on every install, so the boot script cannot rely on it.
+     */
+    private const val BOOT_WFDCTL_PATH = "/data/adb/service.d/wfdctl"
     private const val MAGISK_SERVICE_MARKER = "miracast-go-intent"
 
     /**
@@ -66,6 +72,14 @@ object WfdRootHelper {
      * WSC group information carried in the G/O beacon, so these only need to be present and legal.
      */
     internal const val SINK_GROUP_SSID = "MiracastSink"
+
+    /**
+     * The address a P2P group owner takes, and the one the framework reports for it. `WifiP2pGroup`
+     * hands out 192.168.49.1 for the owner unless a non-default ownerIp was requested, so this is
+     * what a Source computes as the RTSP endpoint.
+     */
+    internal const val SINK_GROUP_OWNER_IP = "192.168.49.1"
+    internal const val SINK_GROUP_OWNER_PREFIX = "24"
 
     /**
      * Passphrase for a root-formed group, randomized once per process so no shared secret ships in
@@ -78,6 +92,19 @@ object WfdRootHelper {
         CharArray(16).apply { for (i in indices) this[i] = alphabet[rng.nextInt(alphabet.length)] }
             .toString()
     }
+
+    /**
+     * The command shapes a supplicant may accept for "form a group with us as Group Owner", tried
+     * in order: stock Android supplies `GROUP_FORMATION`, while a Realtek/SSV p2p port exposes
+     * `P2P_GROUP_ADD` instead and answers `UNKNOWN COMMAND` to the first. Guessing a single
+     * dialect is how a sink silently never becomes Group Owner, so every one is tried and the
+     * interface list is the verdict.
+     */
+    private val GROUP_FORMATION_COMMANDS: List<String> = listOf(
+        "GROUP_FORMATION '%s' '%s'",
+        "P2P_GROUP_ADD p2p-wlan0-0 '%s' '%s'",
+        "P2P_GROUP_ADD wlan0 '%s' '%s'"
+    )
 
     /** `wfdctl` exit codes. See the header comment in wfdctl.c: "sent" is not "configured". */
     private const val WFDCTL_OK = 0
@@ -191,25 +218,69 @@ object WfdRootHelper {
         return nowHeld.isNotEmpty()
     }
 
-    /**
-     * WFD Device Information field, laid out per the Wi-Fi Display spec's 16-bit definition:
+    /* Field masks, declared before [WFD_DEVICE_INFO] because a const val may not reference one
+     * that is declared later. */
+    private const val WFD_DEVICE_TYPE_MASK = 0x3
+    private const val WFD_DEVICE_TYPE_PRIMARY_SINK = 1
+    private const val WFD_SESSION_AVAILABLE_MASK = 0x30
+    private const val WFD_SESSION_AVAILABLE_BIT1 = 0x10
+    private const val WFD_SUPPORTED_HTP_MASK = 0x700
+    private const val WFD_SUPPORTED_HTP_WFD1 = 0x100
+    private const val WFD_SUPPORTED_HTP_WFD2 = 0x200
+    private const val WFD_SUPPORTS_UAPSD = 0x800
+    private const val WFD_VIDEO_CAPABILITY_MASK = 0x7000
+    private const val WFD_VIDEO_CAPABILITY_720P60_1080P30 = 0x3000
+
+    /*
+     * WFD Device Information field, laid out per the Wi-Fi Display spec's 16-bit definition.
      *
-     *   0x00001  bit 0      Session Available
-     *   0x00000  bits 1-2   Preferred HTP mode 0 = sink only
-     *   0x00070  bits 4-6   Supported HTP modes: 1024x768 | 1280x720 | 1920x1080
-     *   0x00080  bit 7      Supports U-APSD
-     *   0x00C00  bits 10-11 Supported video capability 3 = 1080p30 / 720p60
+     * The bit positions below are authoritative as published in Android's own
+     * `android.net.wifi.p2p.WifiP2pWfdInfo` (and unchanged since it was introduced for Miracast):
      *
-     * Advertising no HTP mode and no video capability is what makes several Sources list the sink
-     * but refuse to open a session against it, so the full set is declared. Preferred HTP mode
-     * stays 0 (sink only); 2 (both) made the device disappear from some Sources' lists.
+     *   0x0003  bits 0-1    Device type. 0 = Source, 1 = Primary Sink, 2 = Secondary Sink,
+     *                       3 = Source or Primary Sink.
+     *   0x0004  bit 2      Coupled Sink Support at Source
+     *   0x0008  bit 3      Coupled Sink Support at Sink
+     *   0x0030  bits 4-5   Session Available, two bits. 01 = session available at the time of
+     *                       discovery, 10 = session not available, 11 = reserved.
+     *                       Android's `setSessionAvailable(true)` writes 0x10 and clears 0x20, so
+     *                       0x10 is the only value that means "available now".
+     *   0x0060  bits 6-7   Preferred HTP mode. 0 = sink only, 1 = WFD v1, 2 = WFD v2
+     *   0x0700  bits 8-10  Supported HTP modes. bit 8 = WFD v1, bit 9 = WFD v2, bit 10 = ?
+     *   0x0800  bit 11     Supports U-APSD
+     *   0x7000  bits 12-14 Supported video capability. 0 = no video capability, 3 = 720p60
+     *                       with 1080p30.
+     *
+     * Two things in the earlier value 0xCF1 broke the session, and both were bit-arithmetic
+     * errors against the layout above:
+     *
+     *  - bits 4-5 read 0b11, i.e. Session Available = "reserved / not available". A Source
+     *    reading that field never gets told a session can be opened, so it lists the sink, the
+     *    user taps it, and the handshake stalls in "connecting" forever.
+     *  - bits 12-14 read 0, i.e. Supported Video Capability = "no supported video capability".
+     *    A Source that respects that field has no display format to negotiate against.
+     *
+     * A live source was used as the reference: a Redmi 10X advertises `wfd_dev_info=
+     * 0x00101c440032`, whose device-information field is 0x0010 -- device type 0 (Source) with
+     * bits 4-5 = 0x10 for session available. 0x3B11 is the same field with the primary-sink
+     * bits set instead.
+     *
+     * Preferred HTP mode stays 0 (sink only); setting it to 2 made the device disappear from
+     * some Sources' lists, so it is not claimed. Declaring no video capability is what makes
+     * several Sources list the sink but refuse to open a session against it, so the capability
+     * bits are set.
      */
-    private const val WFD_DEVICE_INFO = 0xCF1
+    private const val WFD_DEVICE_INFO =
+        (WFD_DEVICE_TYPE_PRIMARY_SINK and WFD_DEVICE_TYPE_MASK) or
+            WFD_SESSION_AVAILABLE_BIT1 or
+            (WFD_SUPPORTED_HTP_WFD1 or WFD_SUPPORTED_HTP_WFD2) or
+            WFD_SUPPORTS_UAPSD or
+            (WFD_VIDEO_CAPABILITY_720P60_1080P30 and WFD_VIDEO_CAPABILITY_MASK)
 
     /**
      * WFD Device Information subelement value (id 0 is supplied separately to WFD_SUBELEM_SET).
      * 0006 = six-byte payload length
-     * 0cf1 = WFD_DEVICE_INFO formatted as two bytes, see above
+     * 3b11 = WFD_DEVICE_INFO formatted as two bytes, see above
      * 1c44 = RTSP control port 7236
      * 0032 = 50 Mbps maximum throughput
      */
@@ -511,7 +582,7 @@ object WfdRootHelper {
         // only setting that is both authoritative and durable — no live P2P_SET spelling is
         // accepted by their control sockets, and the intent is read once at supplicant startup,
         // so a value that is wrong on disk cannot be corrected at runtime by any other means.
-        val configResult = applyGroupOwnerIntentToConfig()
+        val configResult = applyGroupOwnerIntentToConfig(binaryPath)
         if (configResult == GoIntentConfigResult.PATCHED) restartWifiForGroupOwnerIntent()
         val configApplied = configResult != GoIntentConfigResult.FAILED
 
@@ -606,7 +677,7 @@ object WfdRootHelper {
      * The same body is installed as a Magisk boot service, because the vendor image restores the
      * file on every reboot and would silently undo the fix.
      */
-    private fun applyGroupOwnerIntentToConfig(): GoIntentConfigResult {
+    private fun applyGroupOwnerIntentToConfig(binaryPath: String?): GoIntentConfigResult {
         val script = goIntentConfigPatchScript()
         val scriptPath = "/data/local/tmp/miracast_go_intent.sh"
         val install = runAsRoot(
@@ -661,7 +732,7 @@ object WfdRootHelper {
         // leaves behind, and it is the state that would otherwise be lost at the next reboot.
         // Rewriting the service on a tick that found nothing to do is harmless: it is a fixed
         // file in /data/adb, not the radio.
-        if (result != GoIntentConfigResult.FAILED) installBootPersistence(script)
+        if (result != GoIntentConfigResult.FAILED) installBootPersistence(script, binaryPath)
         return result
     }
 
@@ -716,17 +787,41 @@ object WfdRootHelper {
     /**
      * Install the patch as a Magisk boot service. `/vendor` is restored from the vendor image on
      * every boot, so without this the intent returns to 0 and the next boot undoes the fix.
+     *
+     * The service also keeps advertising the Wi-Fi Display element. That runtime path needs an
+     * `su` grant, and Magisk drops grants across reinstalls — a freshly installed build has a new
+     * uid and no policy entry at all. A boot service runs as root unconditionally, so the sink
+     * stays a sink even when the app is uninstalled, upgraded, or denied root. Both paths write
+     * the same value, so they cannot disagree.
      */
-    private fun installBootPersistence(script: String) {
+    private fun installBootPersistence(script: String, helperPath: String?) {
         if (runAsRoot("test -d /data/adb/service.d").exitCode != 0) {
             Timber.d("WFD: no Magisk service.d — Group Owner intent patch is not persisted across reboot")
             return
         }
+        // The helper must live at a path that does not move on every install, or the script would
+        // chase a file the platform keeps relocating.
+        val helperStaged = helperPath?.let { path ->
+            if (runAsRoot("test -r '$path'").success) {
+                runAsRoot("cp '$path' $BOOT_WFDCTL_PATH && chmod 755 $BOOT_WFDCTL_PATH").success
+            } else false
+        } ?: false
+        if (helperPath != null && !helperStaged) {
+            Timber.w("WFD: could not stage $BOOT_WFDCTL_PATH, so the boot script cannot advertise WFD")
+        }
+
+        // The patch body is written to end with `exit 0`, because it is also run on its own at
+        // runtime. Appended after that, the advertisement below would be dead code, so the exit
+        // moves to the end of the service — the advertisement block supplies its own.
+        val advertisement = if (helperStaged) wfdAdvertiseBootBody() else ""
+        val patchBody = if (advertisement.isEmpty()) script else script.trimEnd().removeSuffix("exit 0").trimEnd()
+
         val body = "#!/system/bin/sh\n" +
             "# $MAGISK_SERVICE_MARKER — generated by Miracast Receiver.\n" +
             "# Re-applies the Group Owner intent to the vendor wifi configuration, which the\n" +
             "# vendor image resets to 0 on every boot.\n" +
-            script
+            patchBody +
+            advertisement
         runAsRoot(
             "cat > $MAGISK_GO_INTENT_SERVICE <<'MIRACAST_EOF'\n$body\nMIRACAST_EOF\n" +
                 "chmod 755 $MAGISK_GO_INTENT_SERVICE"
@@ -735,6 +830,48 @@ object WfdRootHelper {
             else Timber.w("WFD: could not install boot persistence: ${it.output.take(120)}")
         }
     }
+
+    /**
+     * The boot-time half of the advertisement: the same four commands the keep-alive sends, for
+     * ever, as root.
+     *
+     * It runs in a background subshell on purpose. Magisk runs `service.d` scripts in alphabetical
+     * order and waits for each one, and this file sorts before the one that starts the service, so
+     * a blocking loop here would keep the service from starting at boot at all.
+     */
+    private fun wfdAdvertiseBootBody(): String =
+        "\n" +
+            "# --- Wi-Fi Display advertisement --------------------------------------------------\n" +
+            "# The app re-injects this at runtime, but that path needs an su grant, and Magisk\n" +
+            "# drops grants across reinstalls. This loop needs no grant, so the sink stays a sink\n" +
+            "# even when the app has been reinstalled without one.\n" +
+            "WFD_SUBELEM=${subelemHex()}\n" +
+            "(\n" +
+            "while : ; do\n" +
+            "    [ -x $BOOT_WFDCTL_PATH ] || { sleep 45; continue; }\n" +
+            "    for sock in /data/vendor/wifi/wpa/sockets/p2p-dev-wlan0 \\\n" +
+            "                /data/vendor/wifi/wpa/sockets/wlan0 \\\n" +
+            "                /data/vendor/wifi/wpa/sockets/p2p-wlan0-0 \\\n" +
+            "                /data/misc/wifi/sockets/p2p-dev-wlan0 /data/misc/wifi/sockets/wlan0; do\n" +
+            "        [ -S \"\$sock\" ] || continue\n" +
+            "        $BOOT_WFDCTL_PATH \"\$sock\" \"SET wifi_display 1\" \\\n" +
+            "            \"WFD_SUBELEM_SET 0 \$WFD_SUBELEM\" \\\n" +
+            "            \"P2P_SET discoverability 1\" \"P2P_EXT_LISTEN 500 1000\" >/dev/null 2>&1\n" +
+            "    done\n" +
+            "    # The vendor netd registers the group (dumpsys reports groupRole=GroupOwner and\n" +
+            "    # ownerIp=192.168.49.1) but never puts an address on the group interface, so it\n" +
+            "    # is a beacon with no network behind it and every RTSP packet is dropped at the\n" +
+            "    # first hop. Idempotent: an interface that already has an IPv4 is left alone.\n" +
+            "    for gi in /sys/class/net/p2p-wlan0-*; do\n" +
+            "        [ -e \"\$gi\" ] || continue\n" +
+            "        ifc=\"\${gi##*/}\"\n" +
+            "        [ -z \"\$(ip -4 -o addr show \"\$ifc\" 2>/dev/null | grep ' inet ')\" ] || continue\n" +
+            "        ip addr add ${SINK_GROUP_OWNER_IP}/${SINK_GROUP_OWNER_PREFIX} dev \"\$ifc\" >/dev/null 2>&1\n" +
+            "    done\n" +
+            "    sleep 45\n" +
+            "done\n" +
+            ")\n" +
+            "exit 0\n"
 
     /**
      * The intent is read once at supplicant startup, so the config patch is inert until the wifi
@@ -830,10 +967,25 @@ object WfdRootHelper {
             .filter { it.startsWith("p2p") && !it.startsWith("p2p-dev-") }
             .toList()
 
-    /** True when a group interface is present, i.e. this device is currently a Group Owner. */
-    internal fun groupInterfaceExists(): Boolean =
-        groupInterfaceNames().isNotEmpty() ||
-            existingControlSockets().any { kindOf(it) == SocketKind.GROUP_IFACE }
+    /**
+     * True when a group interface is present, i.e. this device is currently a Group Owner.
+     *
+     * Only a real network interface counts. A supplicant control socket is not proof of a group:
+     * this vendor build leaves the socket inode behind after the group interface goes away — a
+     * socket at `/data/vendor/wifi/wpa/sockets/p2p-wlan0-0` with no `p2p-wlan0-0` in
+     * `/sys/class/net`. Trusting it made this function report a group that had already vanished,
+     * so [formSinkGroup] bailed out with "group already present" and never sent a single
+     * formation command, leaving the sink with a WFD beacon and no group behind it. That is
+     * exactly the sink a source lists but can never connect to.
+     */
+    internal fun groupInterfaceExists(): Boolean = groupInterfaceNames().isNotEmpty()
+
+    /**
+     * Weaker hint: a group-shaped control socket exists. Kept for diagnostics only, because it is
+     * the stale socket that masqueraded as a live group above.
+     */
+    internal fun groupControlSocketPresent(): Boolean =
+        existingControlSockets().any { kindOf(it) == SocketKind.GROUP_IFACE }
 
     /**
      * Poll for a group interface. `GROUP_FORMATION` is handled on a worker thread, so the socket
@@ -897,29 +1049,72 @@ object WfdRootHelper {
             return false
         }
 
-        for (socketPath in sockets) {
-            // An unconfirmed reply is worth retrying against the interface list, because the group
-            // may still have been created; the group interface is the proof, not the exit code.
-            val exit = runAsRoot(
-                "$binaryPath $socketPath \"GROUP_FORMATION '$ssid' '$passphrase'\""
-            ).exitCode
-            Timber.d("WFD: GROUP_FORMATION via $socketPath exit=$exit")
-            if (exit == WFDCTL_OK || exit == WFDCTL_UNCONFIRMED) {
-                if (waitForGroupInterface(8_000L)) {
-                    lastGroupFormationDetail = "formed via ${socketPath.substringAfterLast('/')}"
-                    Timber.i("WFD: P2P group formed through $socketPath; this device is now the Group Owner")
-                    return true
+        var triedSomething = false
+        for (template in GROUP_FORMATION_COMMANDS) {
+            for (socketPath in sockets) {
+                triedSomething = true
+                // An unconfirmed reply is worth retrying against the interface list, because the
+                // group may still have been created; the group interface is the proof, not the
+                // exit code.
+                val command = template.format(ssid, passphrase)
+                val exit = runAsRoot("$binaryPath $socketPath \"$command\"").exitCode
+                Timber.d("WFD: $command via $socketPath exit=$exit")
+                if (exit == WFDCTL_OK || exit == WFDCTL_UNCONFIRMED) {
+                    if (waitForGroupInterface(8_000L)) {
+                        lastGroupFormationDetail =
+                            "formed via ${socketPath.substringAfterLast('/')} ($command)"
+                        Timber.i("WFD: P2P group formed through $socketPath; this device is now the Group Owner")
+                        return true
+                    }
+                    Timber.w("WFD: $command on $socketPath was accepted but no group interface appeared")
+                } else {
+                    Timber.w("WFD: $socketPath rejected $command")
                 }
-                Timber.w("WFD: GROUP_FORMATION on $socketPath was accepted but no group interface appeared")
-            } else {
-                Timber.w("WFD: $socketPath rejected GROUP_FORMATION")
             }
         }
 
-        lastGroupFormationDetail = "rejected on every p2p-dev socket"
-        Timber.w("WFD: no supplicant interface accepted GROUP_FORMATION")
+        lastGroupFormationDetail = if (triedSomething) {
+            "rejected or unknown on every p2p-dev socket and every command dialect"
+        } else {
+            "no command dialect tried"
+        }
+        Timber.w("WFD: no supplicant interface accepted any group-formation dialect")
         return false
     }
+
+    /**
+     * Give the group interface its Group Owner address.
+     *
+     * On this vendor netd the framework registers the group (dumpsys reports
+     * `groupRole=GroupOwner, ownerIp=192.168.49.1`) but never puts an address on p2p-wlan0-0, so
+     * the kernel shows no IPv4 at all. The group is then a beacon with no network behind it: a
+     * Source can complete association and can even resolve the RTSP endpoint, and every packet to
+     * it is dropped at the first hop. Assigning the address directly is the missing half of group
+     * setup. Idempotent — an interface that already has an address is left alone.
+     */
+    fun ensureGroupOwnerAddress(): Boolean {
+        val iface = groupInterfaceNames().firstOrNull() ?: return false
+        if (groupAddressOf(iface) != null) return true
+
+        val result = runAsRoot("ip addr add ${SINK_GROUP_OWNER_IP}/${SINK_GROUP_OWNER_PREFIX} dev $iface")
+        val ok = groupAddressOf(iface) != null
+        if (ok) {
+            Timber.i("WFD: assigned the Group Owner address $SINK_GROUP_OWNER_IP to $iface")
+        } else {
+            Timber.w("WFD: could not assign $SINK_GROUP_OWNER_IP to $iface (exit=${result.exitCode})")
+        }
+        return ok
+    }
+
+    /** The IPv4 address currently on an interface, or null when it has none. */
+    internal fun groupAddressOf(iface: String): String? =
+        runAsRootOutput("ip -4 -o addr show $iface 2>/dev/null").orEmpty()
+            .lineSequence()
+            .mapNotNull { line ->
+                if (!line.contains("inet ")) return@mapNotNull null
+                line.substringAfter("inet ").substringBefore(" ").trim().ifEmpty { null }
+            }
+            .firstOrNull()
 
     fun stopAdvertising(context: Context): Boolean {
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -1010,12 +1205,35 @@ object WfdRootHelper {
         out["groupInterface"] = run {
             val names = groupInterfaceNames()
             if (names.isEmpty()) {
-                "no group interface — this device is not a Group Owner, so sources cannot find it"
+                // Flag a stale group socket explicitly: on the vendor build that motivated this
+                // check it reads "no group interface" here while a p2p-wlan0-0 socket file still
+                // exists, and that split is the single fastest way to see a dead group.
+                "no group interface — this device is not a Group Owner, so sources cannot find it" +
+                    (if (groupControlSocketPresent())
+                        " (a group control socket is still on disk, but the interface is gone)"
+                    else "")
             } else {
                 val iface = names.first()
                 val addrs = runAsRootOutput("ip -4 addr show $iface").orEmpty()
                 addrs.ifBlank {
                     "$iface exists but has no IPv4 address yet — the group is still coming up"
+                }
+            }
+        }
+        out["groupOwnerAddress"] = run {
+            val names = groupInterfaceNames()
+            when {
+                names.isEmpty() -> "no group interface"
+                else -> {
+                    val iface = names.first()
+                    val addr = groupAddressOf(iface)
+                    if (addr == null) {
+                        "$iface has no IPv4 address, so nothing can reach the RTSP server on it"
+                    } else if (addr == SINK_GROUP_OWNER_IP) {
+                        "$iface = $addr, the address a Source expects the Group Owner on"
+                    } else {
+                        "$iface = $addr, not the Group Owner address a Source expects"
+                    }
                 }
             }
         }
@@ -1179,9 +1397,16 @@ object WfdRootHelper {
                 // A group that has just come up carries no WFD element in its beacon yet, so the
                 // injection has to be forced — the 4 s throttle would otherwise leave p2p0 bare.
                 val hadGroup = groupInterfaceExists()
-                if (keepAliveReFormGroup) {
+                // A group can disappear without the framework ever telling us — a supplicant
+                // restart is enough, and then no Group Owner message is delivered. With no group
+                // interface the sink is a beacon with nothing behind it, so re-form it regardless
+                // of who owns group formation.
+                if (keepAliveReFormGroup || !hadGroup) {
                     runCatching { formSinkGroup(appContext) }
                 }
+                // A group the framework created but netd never addressed has no IPv4 at all, so an
+                // attached Source has nowhere to reach the RTSP server on. Cheap and idempotent.
+                runCatching { ensureGroupOwnerAddress() }
                 runCatching { advertiseSink(appContext, force = !hadGroup) }
                 var sleptMs = 0L
                 while (keepAliveRunning && sleptMs < periodMs) {

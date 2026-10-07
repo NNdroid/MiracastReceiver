@@ -121,40 +121,50 @@ object WfdRootHelper {
     fun advertisementStatus(): AdvertisementStatus = lastAdvertisementStatus
 
     /**
-     * The Wi-Fi service refuses to deliver `android.net.wifi.p2p.*` broadcasts to a receiver that
-     * holds no location permission. On a stock build `NEARBY_WIFI_DEVICES` satisfies that check;
-     * on vendor builds it still consults `ACCESS_FINE_LOCATION`, and then the failure is
-     * invisible: discovery succeeds, the Source lists the sink, the group forms, and the receiver
-     * never learns about it because `CONNECTION_STATE_CHANGE` is dropped on the way in. That is
-     * precisely the "visible but never connectable" symptom. Root can grant these through `pm`
-     * with no Settings detour, so no user interaction is needed.
+     * Two gates stand between this receiver and the Wi-Fi service's own broadcasts: the runtime
+     * permission, and the location appop. `NEARBY_WIFI_DEVICES` covers the scan and group APIs but
+     * neither of them on vendor builds, so with only that granted the failure is invisible —
+     * discovery succeeds, every Source lists the sink, its group forms, and `CONNECTION_STATE_CHANGE`
+     * is dropped on the way in. That is precisely the "visible but never connectable" symptom.
+     * Root grants both through `pm` and `appops`, so no Settings detour and no user interaction.
+     *
+     * On the receiver tested the appop came back capped at foreground-only mode after granting,
+     * which the Wi-Fi service reports as `excludes appop android:fine_location`. That residual
+     * case only hides group state from this app; the RTSP side binds every interface and does not
+     * depend on the broadcast, so a connection still completes.
      */
     fun grantWifiPermissions(context: Context): Boolean {
         val wanted = listOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION
         )
+        fun shortName(permission: String) = permission.substringAfterLast('.')
         val held = wanted.filter {
             ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
         }
-        if (held.isNotEmpty()) return true
-        val output = runAsRootCapture(
-            wanted.joinToString("\n") { "pm grant ${context.packageName} $it 2>/dev/null" }
+        if (held.isEmpty()) {
+            runAsRootCapture(wanted.joinToString("\n") { "pm grant ${context.packageName} $it 2>/dev/null" })
+        }
+        // The runtime permission is only the first of two gates. The Wi-Fi service also consults the
+        // location *appop*, and a freshly granted permission leaves it in foreground-only mode,
+        // which still drops a broadcast that arrives while the receiver is backgrounded.
+        runAsRootCapture(
+            listOf("android:fine_location", "android:coarse_location").joinToString("\n") {
+                "cmd appops set ${context.packageName} $it allow 2>/dev/null"
+            }
         )
         val nowHeld = wanted.filter {
             ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
         }
-        fun shortName(permission: String) = permission.substringAfterLast('.')
         if (nowHeld.isNotEmpty()) {
             Timber.i(
-                "WFD: granted ${nowHeld.map { shortName(it) }.joinToString()} " +
-                    "so the Wi-Fi service will deliver P2P broadcasts"
+                "WFD: granted ${nowHeld.map { shortName(it) }.joinToString()} and allowed the " +
+                    "location appops, so the Wi-Fi service can deliver P2P broadcasts"
             )
         } else {
             Timber.w(
-                "WFD: could not self-grant ${wanted.map { shortName(it) }.joinToString()} " +
-                    "(pm output='${output?.trim()?.take(160) ?: "no root available"}'); the Wi-Fi service " +
-                    "will keep dropping P2P connection broadcasts"
+                "WFD: could not self-grant ${wanted.map { shortName(it) }.joinToString()}; the " +
+                    "Wi-Fi service will keep dropping P2P connection broadcasts"
             )
         }
         return nowHeld.isNotEmpty()

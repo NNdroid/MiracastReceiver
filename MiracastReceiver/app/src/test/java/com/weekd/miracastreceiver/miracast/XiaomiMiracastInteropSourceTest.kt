@@ -32,6 +32,8 @@ class XiaomiMiracastInteropSourceTest {
         // never connectable. Root grants it through pm, so no Settings detour is needed.
         assertTrue(rootHelper.contains("fun grantWifiPermissions"))
         assertTrue(rootHelper.contains("pm grant"))
+        assertTrue(rootHelper.contains("cmd appops set"))
+        assertTrue(rootHelper.contains("android:fine_location"))
         assertTrue(rootHelper.contains("ACCESS_FINE_LOCATION"))
         assertTrue(wifiDirect.contains("WfdRootHelper.grantWifiPermissions(appContext)"))
         assertTrue(manifest.contains("android.permission.ACCESS_FINE_LOCATION"))

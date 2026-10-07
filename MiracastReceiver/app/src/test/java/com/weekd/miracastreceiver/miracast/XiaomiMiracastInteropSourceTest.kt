@@ -218,14 +218,18 @@ class XiaomiMiracastInteropSourceTest {
     fun wifiCycleUsesTheArgumentsThisSupplicantActuallyAccepts() {
         // `cmd wifi set-wifi-enabled` takes the words enabled|disabled. Boolean arguments are
         // rejected with an IllegalArgumentException, so a cycle written with true/false never ran
-        // and the patched intent never took effect. The P2P interface is cycled first, because
-        // that is what Group Owner negotiation needs and wificond does not recreate it from a
-        // bare supplicant restart.
-        assertTrue(rootHelper.contains("set-p2p-enabled"))
+        // and the patched intent never took effect.
         assertTrue(rootHelper.contains("set-wifi-enabled disabled"))
         assertTrue(rootHelper.contains("set-wifi-enabled enabled"))
         assertFalse(rootHelper.contains("set-wifi-enabled false"))
         assertFalse(rootHelper.contains("set-wifi-enabled true"))
+        // The primary cycle is the HAL service, probed for by name: sending ctl.restart at a
+        // service that does not exist is a silent no-op, which is how the intent could have sat
+        // on disk and still never reached the supplicant.
+        assertTrue(rootHelper.contains("setprop ctl.restart"))
+        assertTrue(rootHelper.contains("echo \\\"RESTARTED"))
+        // The toggle is only the last resort, for images that expose no HAL service name.
+        assertTrue(rootHelper.contains("echo \\\"TOGGLED via cmd wifi\\\""))
     }
 
     @Test
@@ -472,5 +476,97 @@ class XiaomiMiracastInteropSourceTest {
         assertFalse(appClass.contains("if (BuildConfig.DEBUG)"))
         // Enough history to hold a whole failed attempt at the observed logging rate.
         assertTrue(logBuffer.contains("MAX_ENTRIES = 2000"))
+    }
+
+    @Test
+    fun groupOwnerIntentGoesThroughTheWritableRuntimeConfigBeforeTheVendorOverlays() {
+        // The vendor overlays under /vendor were either zero bytes or on a read-only partition, so
+        // a patch aimed only at them reported that it tried and changed nothing. The HAL keeps a
+        // merged copy under /data that is both writable and the file the supplicant actually
+        // reads. It has to be on the candidate list at all — it was not — and it has to come
+        // first, because the intent is taken from whichever config the patcher rewrites.
+        assertTrue(rootHelper.contains("\"/data/vendor/wifi/wpa/p2p_supplicant.conf\""))
+        assertTrue(rootHelper.contains("P2P_SUPPLICANT_CONFIGS = listOf("))
+        val listBlock = rootHelper.substringAfter("P2P_SUPPLICANT_CONFIGS = listOf(")
+            .substringBefore(")")
+        val dataIndex = listBlock.indexOf("/data/vendor/wifi/wpa/p2p_supplicant.conf")
+        val vendorIndex = listBlock.indexOf("/vendor/etc/wifi")
+        assertTrue("the writable /data copy must precede the read-only /vendor overlays",
+            dataIndex in 0 until vendorIndex)
+    }
+
+    @Test
+    fun aReadBackTrustsStdoutOverTheSuExitCodeSoAWorkingConfigIsNotReportedBroken() {
+        // su -c on this image exits 2 while still printing the correct answer, so keying a
+        // read-back on the exit code made the WFD advertisement report verified=false on every
+        // cycle even though the supplicant echoed the injected element back byte for byte. The
+        // same trap made a successful config patch read back as null and therefore as a failure,
+        // which is what kept the wifi stack from ever being cycled to pick the intent up.
+        assertTrue(rootHelper.contains("private fun runAsRootQuery"))
+        // A nonzero exit with a reply is a reply, not a failure.
+        assertTrue(rootHelper.contains("exited \$exit but answered"))
+        // Only genuinely empty output counts as no answer.
+        assertTrue(rootHelper.contains("produced no reply"))
+        // Every read-back path goes through it, not just one.
+        assertTrue(rootHelper.contains("runAsRootQuery(\"\$binaryPath \$socketPath \\\"WFD_SUBELEM_GET 0\\\"\")"))
+        assertTrue(rootHelper.contains("runAsRootQuery(\n            \"grep -hE"))
+        assertTrue(rootHelper.contains("runAsRootQuery(\"sh \$scriptPath\")"))
+    }
+
+    @Test
+    fun theWifiStackIsCycledOnlyWhenTheConfigWasActuallyWritten() {
+        // The intent is read once at supplicant startup, so nothing takes effect without a cycle.
+        // But a cycle drops the LAN link the app is usually sitting on, so it must be gated on a
+        // write that really happened — otherwise an already-correct config costs a connection
+        // drop on every app start and on every reboot.
+        assertTrue(rootHelper.contains("private enum class GoIntentConfigResult"))
+        assertTrue(rootHelper.contains("PATCHED, ALREADY_CURRENT, FAILED"))
+        assertTrue(rootHelper.contains(
+            "if (configResult == GoIntentConfigResult.PATCHED) restartWifiForGroupOwnerIntent()"))
+        // The restart target is probed rather than guessed: sending ctl.restart at a service name
+        // that does not exist is a silent no-op, which is how the intent could have sat on disk
+        // and still never reached the supplicant.
+        assertTrue(rootHelper.contains("vendor.wifi_hal_legacy"))
+        assertTrue(rootHelper.contains("getprop init.svc.\\\$s"))
+        // And the wait for the link is a poll, so a slow box is not judged dead on arrival.
+        assertTrue(rootHelper.contains("Thread.sleep(5_000L)"))
+    }
+
+    @Test
+    fun theLiveIntentProbeIsSkippedOnceTheConfigAlreadyHoldsIt() {
+        // With the writable config in place the live P2P_SET probe adds nothing but churn: sockets
+        // multiplied by spellings, one forked su subprocess each, every keep-alive tick, and every
+        // one refused by the vendor control socket. That traffic shares the radio with the Source
+        // that is negotiating, which is the one moment it must not be there.
+        assertTrue(rootHelper.contains("the live P2P_SET probe is not attempted"))
+        assertTrue(rootHelper.contains("if (configApplied) {"))
+        // The probe is still there for images that have no writable configuration at all.
+        assertTrue(rootHelper.contains("GO_INTENT_SET_NAMES"))
+        assertTrue(rootHelper.contains("for (name in GO_INTENT_SET_NAMES)"))
+    }
+
+    @Test
+    fun patchingPreservesSupplicantOwnershipSoTheStackCanStillWriteItsConfig() {
+        // The supplicant runs as wifi with update_config=1, so it has to keep being able to write
+        // its own config. A root rename makes the file root:root and the formed P2P groups stop
+        // being persisted back to it — a silent regression that shows up only after a reboot.
+        assertTrue(rootHelper.contains("stat -c '%U:%G'"))
+        assertTrue(rootHelper.contains("stat -c '%a'"))
+        assertTrue(rootHelper.contains("chown \\\"\\\$own\\\""))
+        assertTrue(rootHelper.contains("chmod \\\"\\\$mode\\\""))
+        // And a file that is already correct is left alone, so a keep-alive tick is not a churn.
+        assertTrue(rootHelper.contains("echo \\\"OK \\\$f\\\""))
+        // Boot persistence is installed only when a write really happened.
+        assertTrue(rootHelper.contains("installBootPersistence(script)"))
+    }
+
+    @Test
+    fun diagnosticsNameWhichConfigFileIsActuallyWritable() {
+        // Which candidate is writable decides whether the image can be fixed at all, and the two
+        // look identical in a log line that says only "configApplied=false". Surfacing it makes the
+        // dead end visible from the diagnostics page instead of requiring a shell session.
+        assertTrue(rootHelper.contains("out[\"groupOwnerIntentConfigFiles\"]"))
+        assertTrue(rootHelper.contains("WRITABLE \\\$f"))
+        assertTrue(rootHelper.contains("READONLY \\\$f"))
     }
 }

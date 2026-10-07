@@ -16,6 +16,7 @@ import android.os.Handler
 import android.os.Looper
 import androidx.core.content.ContextCompat
 import timber.log.Timber
+import java.lang.reflect.InvocationHandler
 import java.lang.reflect.InvocationTargetException
 
 /**
@@ -76,6 +77,21 @@ class WifiDirectManager(
     private var frameworkStarted = false
     private var discoveryRetryCount = 0
     private var sinkGroupAttempted = false
+
+    /**
+     * The framework's P2P control surface answered once with a hard refusal. On vendor builds that
+     * ship a proprietary P2P engine the framework `WifiP2pManager` is a stub: `createGroup`,
+     * `discoverPeers`, `setDeviceName` and `addLocalService` all return ERROR immediately and will
+     * keep doing so for the lifetime of the process. The latch stops asking again, because each
+     * call is a round trip into the Wi-Fi service that shares state with the vendor P2P engine
+     * handling the Source's real connection request — and a stray `createGroup()` while that
+     * negotiation is in flight is exactly how a working connect attempt gets reset out from under
+     * it. Latched for good rather than backoff-timed, since the answer is deterministic.
+     */
+    @Volatile
+    private var frameworkGroupFormationBroken = false
+
+    private var p2pCapabilityLogged = false
 
     var onDeviceConnected: ((WifiP2pDevice) -> Unit)? = null
     var onDeviceDisconnected: (() -> Unit)? = null
@@ -151,6 +167,7 @@ class WifiDirectManager(
             if (channel == null) return
 
             frameworkStarted = true
+            logP2pCapability(p2p)
             registerReceiver()
             // The poll runs whether or not the receiver registered: if the Wi-Fi service refuses
             // to deliver its broadcasts to this UID, this is the only path that notices a join.
@@ -178,6 +195,66 @@ class WifiDirectManager(
             Timber.e(e, "Failed to start Wi-Fi Direct")
         }
     }
+
+    /**
+     * One capability read that settles which P2P role this hardware is allowed to take. On a box
+     * that cannot be a Group Owner there is nothing to gain from `createGroup()`, and on one that
+     * cannot run STA and P2P concurrently the group can never come up while the box is on Wi-Fi —
+     * which is the shipping configuration of exactly these TVs. Either answer means the sink's job
+     * is to advertise and wait for the Source rather than to build its own network.
+     *
+     * `requestP2pInfo` is @hide and its callback type is @hide too, so both are reached through
+     * reflection the way the other hidden P2P setters here are. The value is read for logging only,
+     * so it is tolerated when the query is refused outright.
+     */
+    private fun logP2pCapability(p2p: WifiP2pManager) {
+        val ch = channel ?: return
+        if (p2pCapabilityLogged) return
+        p2pCapabilityLogged = true
+        try {
+            val listenerType = Class.forName("android.net.wifi.p2p.ActionListener")
+            val listener = java.lang.reflect.Proxy.newProxyInstance(
+                listenerType.classLoader,
+                arrayOf(listenerType),
+                InvocationHandler { _, method, args ->
+                    if (method.name != "onResult") return@InvocationHandler Unit
+                    val info = args?.firstOrNull() ?: return@InvocationHandler Unit
+                    val supportsGo = fieldOf(info, "supportsGroupOwner")
+                    val supportsConcurrent = fieldOf(info, "supportsConcurrentConnections")
+                    Timber.i(
+                        "P2P capabilities: supportsGroupOwner=$supportsGo " +
+                            "supportsConcurrentConnections=$supportsConcurrent " +
+                            "maxGroupSessions=${fieldOf(info, "maxGroupSessions")} " +
+                            "supportsPersistentGroup=${fieldOf(info, "supportsPersistentGroup")}"
+                    )
+                    if (supportsGo == false) {
+                        Timber.w(
+                            "P2P: this device cannot be a Group Owner, so it serves whatever group " +
+                                "the Source forms instead of creating one of its own"
+                        )
+                    }
+                    if (supportsConcurrent == false) {
+                        Timber.w(
+                            "P2P: STA + P2P concurrency unsupported, so while the box stays on its " +
+                                "Wi-Fi network no group can form through the framework — the vendor " +
+                                "stack has to own it"
+                        )
+                    }
+                }
+            )
+            p2p::class.java.getMethod(
+                "requestP2pInfo", WifiP2pManager.Channel::class.java, listenerType
+            ).invoke(p2p, ch, listener)
+        } catch (e: Exception) {
+            p2pCapabilityLogged = false
+            Timber.d("P2P capability unavailable: ${e.message}")
+        }
+    }
+
+    /** Read one public field by name from a reflective result, tolerating a missing field. */
+    private fun fieldOf(target: Any, name: String): Any? = runCatching {
+        target.javaClass.getField(name).get(target)
+    }.getOrElse { "?" }
 
     /**
      * The part that makes this device show up in the Source's device list. Runs the root work off
@@ -265,6 +342,11 @@ class WifiDirectManager(
     private fun createSinkGroup() {
         val p2p = p2pManager() ?: return
         val ch = channel ?: return
+        if (frameworkGroupFormationBroken) {
+            // Already proven dead for this process. The vendor stack owns group formation here,
+            // and the Source's own connect request is the thing that forms the group.
+            return
+        }
         Timber.i("Creating the P2P group so this device acts as the Miracast sink Group Owner")
         try {
             p2p.createGroup(ch, object : WifiP2pManager.ActionListener {
@@ -284,8 +366,14 @@ class WifiDirectManager(
                         WifiP2pManager.BUSY -> mainHandler.postDelayed({ if (isStarted) createSinkGroup() }, 1_500L)
                         else -> {
                             sinkGroupAttempted = true
+                            frameworkGroupFormationBroken = true
                             RuntimeStateMiracast.report("SINK_GROUP_FAILED_${reasonText(reason)}")
-                            Timber.w("Sink createGroup failed: ${reasonText(reason)}")
+                            Timber.w(
+                                "Sink createGroup failed: ${reasonText(reason)}; the framework P2P " +
+                                    "control surface is unavailable for this process, so group " +
+                                    "formation is left to the vendor stack and to the Source's own " +
+                                    "connect request"
+                            )
                             // The framework path is not the only one, and it fails outright on many
                             // vendor builds. Root can create the group through wpa_supplicant
                             // regardless, which is the whole point: without a group there is no
@@ -525,6 +613,12 @@ class WifiDirectManager(
         val p2p = p2pManager() ?: return
         val ch = channel ?: return
         if (!p2pPermissionsGranted()) return
+        if (frameworkGroupFormationBroken) {
+            // A sink is the party that gets discovered, so this is belt and braces anyway — and on
+            // the builds where createGroup() is refused, discoverPeers() is refused with the same
+            // ERROR and there is nothing left to be gained from asking.
+            return
+        }
         try {
             p2p.discoverPeers(ch, object : WifiP2pManager.ActionListener {
                 override fun onSuccess() {

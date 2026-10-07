@@ -451,6 +451,18 @@ object WfdRootHelper {
     private var lastGroupOwnerIntentPatchAttempts: String = ""
 
     /**
+     * Set once every available spelling has been refused and the vendor configuration cannot be
+     * rewritten. The GO intent is then fixed at whatever the firmware chose and no amount of
+     * re-asking changes it, so re-probing is pure churn: four `su` subprocesses per attempt plus a
+     * config rewrite and a read-back, every keep-alive tick. That churn lands straight on top of
+     * a Source's in-flight handshake on a shared radio, which is the one moment it must not be
+     * there. Latched rather than backoff-timed because the answer is deterministic and the
+     * firmware setting does not change for the lifetime of the boot.
+     */
+    @Volatile
+    private var groupOwnerIntentUnsupported = false
+
+    /**
      * Establish the Group Owner intent the WFD spec requires of a Sink, the maximum value. A
      * supplicant left at 0 loses every GO negotiation against an Android Source, which asks for
      * the lowest intent; the Source then becomes the sink and the mirror is routed to the phone,
@@ -470,6 +482,8 @@ object WfdRootHelper {
                 .apply { isDaemon = true }.start()
             return true
         }
+
+        if (groupOwnerIntentUnsupported) return lastGroupOwnerIntentConfigured
 
         val binaryPath = helperBinary(context)
 
@@ -524,6 +538,17 @@ object WfdRootHelper {
                     "configApplied=$configApplied); the sink cannot win GO negotiation and the mirror would be " +
                     "routed to the Source's device instead of this one."
             )
+            // Neither path worked at all: no writable vendor config and not one spelling
+            // acknowledged. Asking again cannot change the firmware's answer, so stop paying for
+            // it — but only once the whole probe has been exhausted, so a transiently absent
+            // control socket is not mistaken for a permanent refusal.
+            if (!configApplied && !acknowledged) {
+                groupOwnerIntentUnsupported = true
+                Timber.w(
+                    "WFD: no Group Owner intent path is available on this image; the intent stays at " +
+                        "the firmware default and will not be probed again for this boot"
+                )
+            }
         }
         return effective
     }
@@ -814,6 +839,7 @@ object WfdRootHelper {
         waitForAdvertiseIdle()
         lastAdvertisementStatus = AdvertisementStatus(success = false, detail = "stopped")
         lastGroupOwnerIntentConfigured = false
+        groupOwnerIntentUnsupported = false
 
         val binaryPath = helperBinary(context) ?: return false
         var sent = false
@@ -860,6 +886,7 @@ object WfdRootHelper {
             ?: "not patched"
         out["groupOwnerIntentPatchAttempts"] = lastGroupOwnerIntentPatchAttempts.ifBlank { "not run" }
             ?: "not patched"
+        out["groupOwnerIntentUnsupported"] = groupOwnerIntentUnsupported.toString()
         out["groupOwnerIntentBootPersisted"] =
             runAsRoot("test -f $MAGISK_GO_INTENT_SERVICE").success.toString()
         out["groupFormation"] = lastGroupFormationDetail

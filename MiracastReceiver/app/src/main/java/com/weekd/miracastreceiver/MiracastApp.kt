@@ -16,11 +16,14 @@ class MiracastApp : Application() {
         NetworkUtils.initialize(this)
         LegacyUiLocalizer.install(this)
 
-        // Keep a bounded in-memory diagnostic log in all builds for the local WebUI.
+        // A bounded in-memory diagnostic log for the local WebUI, plus logcat in every build.
+        // Gate logcat on DEBUG and a receiver stops producing any observable evidence: the buffer
+        // keeps the last 600 lines and everything older is gone, so a failure that happened once
+        // during a Miracast attempt is unrecoverable. On a TV box that is usually backgrounded
+        // there is no other way to read the log, and Timber.plant() only adds a tree — planting
+        // both keeps the two surfaces independent.
         Timber.plant(WebLogBuffer.timberTree)
-        if (BuildConfig.DEBUG) {
-            Timber.plant(Timber.DebugTree())
-        }
+        Timber.plant(Timber.DebugTree())
 
         // Optional official Google Cast Connect integration. A normal build with no Cast App ID
         // keeps this disabled and therefore remains compatible with non-Google Android TV devices.

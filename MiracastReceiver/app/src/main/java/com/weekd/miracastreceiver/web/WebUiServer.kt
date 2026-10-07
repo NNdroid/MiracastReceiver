@@ -161,7 +161,7 @@ class WebUiServer(
                     method == "GET" && path == "/api/config" -> sendJson(output, 200, buildConfig())
                     method == "GET" && path == "/api/diagnostics" -> sendJson(output, 200, buildDiagnostics())
                     method == "GET" && path == "/api/logs" -> {
-                        val limit = query["limit"]?.toIntOrNull() ?: 250
+                        val limit = query["limit"]?.toIntOrNull() ?: 800
                         sendJson(output, 200, buildLogs(limit))
                     }
                     method == "POST" && path == "/api/config" -> handleConfig(output, body)
@@ -420,7 +420,7 @@ class WebUiServer(
                 .put("webUiBindAddress", serverSocket?.inetAddress?.hostAddress.orEmpty())
                 .put("upnp", AppSettings.getUpnpPort(appContext))
                 .put("miracastRtsp", MIRACAST_RTSP_PORT))
-            .put("limits", JSONObject().put("maxRequestBodyBytes", MAX_BODY_BYTES).put("maxConcurrentClients", MAX_CONCURRENT_CLIENTS).put("maxMediaUrlLength", MediaUrlRequest.MAX_URL_LENGTH).put("maxMediaHeaders", MediaUrlRequest.MAX_HEADERS).put("logEntries", WebLogBuffer.snapshot(600).size))
+            .put("limits", JSONObject().put("maxRequestBodyBytes", MAX_BODY_BYTES).put("maxConcurrentClients", MAX_CONCURRENT_CLIENTS).put("maxMediaUrlLength", MediaUrlRequest.MAX_URL_LENGTH).put("maxMediaHeaders", MediaUrlRequest.MAX_HEADERS).put("logEntries", WebLogBuffer.snapshot(2000).size))
             .put("miracast", buildMiracastDiagnostics())
     }
 

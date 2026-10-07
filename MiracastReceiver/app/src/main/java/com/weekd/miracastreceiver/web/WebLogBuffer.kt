@@ -9,7 +9,7 @@ import java.util.Locale
 /** Small in-memory ring buffer exposed by the local WebUI diagnostics page. */
 object WebLogBuffer {
 
-    private const val MAX_ENTRIES = 600
+    private const val MAX_ENTRIES = 2000
     private val entries = ArrayDeque<Entry>(MAX_ENTRIES)
     private val lock = Any()
 
@@ -46,7 +46,7 @@ object WebLogBuffer {
         }
     }
 
-    fun snapshot(limit: Int = 250): List<Entry> = synchronized(lock) {
+    fun snapshot(limit: Int = 800): List<Entry> = synchronized(lock) {
         entries.takeLast(limit.coerceIn(1, MAX_ENTRIES)).toList()
     }
 

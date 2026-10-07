@@ -12,6 +12,8 @@ class XiaomiMiracastInteropSourceTest {
     private val rootHelper = File("src/main/java/com/weekd/miracastreceiver/miracast/WfdRootHelper.kt").readText()
     private val manifest = File("src/main/AndroidManifest.xml").readText()
     private val appBuild = File("build.gradle.kts").readText()
+    private val appClass = File("src/main/java/com/weekd/miracastreceiver/MiracastApp.kt").readText()
+    private val logBuffer = File("src/main/java/com/weekd/miracastreceiver/web/WebLogBuffer.kt").readText()
 
     @Test
     fun sinkCreatesItsOwnGroupOwnerGroupOrItIsInvisibleToSources() {
@@ -412,5 +414,63 @@ class XiaomiMiracastInteropSourceTest {
         assertTrue(wifiDirect.contains("val freshGroup = key != announcedGroupKey"))
         // A torn-down group must count as fresh again when it is formed a second time.
         assertTrue(wifiDirect.contains("announcedGroupKey = null"))
+    }
+
+    @Test
+    fun aRefusedCreateGroupIsLatchedSoTheFrameworkSurfaceIsNotPolledEveryTick() {
+        // On the reference TV box the framework WifiP2pManager is a stub: createGroup,
+        // discoverPeers, setDeviceName and addLocalService all return ERROR immediately and keep
+        // doing so forever. Each call is a round trip into the Wi-Fi service that shares state
+        // with the vendor P2P engine, and a stray createGroup() during the Source's own connect
+        // request is what resets that negotiation out from under it. One hard refusal is enough
+        // to know the answer, so asking again is only churn.
+        assertTrue(wifiDirect.contains("frameworkGroupFormationBroken"))
+        // The latch is set only on a hard refusal. BUSY is transient and still gets retried.
+        assertTrue(wifiDirect.contains("WifiP2pManager.BUSY ->"))
+        assertTrue(wifiDirect.contains("frameworkGroupFormationBroken = true"))
+        // And it is honoured before every framework P2P call that would otherwise be retried.
+        assertTrue(wifiDirect.contains("if (frameworkGroupFormationBroken)"))
+    }
+
+    @Test
+    fun p2pCapabilitiesAreLoggedSoTheRoleThisHardwareAllowsIsKnown() {
+        // A sink that cannot be a Group Owner has nothing to gain from createGroup(), and one that
+        // cannot run STA and P2P concurrently can never form a group while it stays on its Wi-Fi
+        // network — which is how these TV boxes ship. Reading the capability once settles it
+        // instead of inferring it from repeated failures.
+        assertTrue(wifiDirect.contains("requestP2pInfo"))
+        assertTrue(wifiDirect.contains("supportsGroupOwner"))
+        assertTrue(wifiDirect.contains("supportsConcurrentConnections"))
+    }
+
+    @Test
+    fun groupOwnerIntentIsNotProbedAgainOnceEveryPathHasRefusedIt() {
+        // Every 45 s the keep-alive re-asserted the Group Owner intent: four spellings of P2P_SET,
+        // each one a forked su subprocess, plus a vendor config rewrite and a read-back. On the
+        // reference box all four spellings FAIL and /vendor is unwritable, so the answer never
+        // changes and the churn was pure cost — landing squarely on the shared radio during the
+        // one moment a Source's handshake must not be disturbed.
+        assertTrue(rootHelper.contains("groupOwnerIntentUnsupported"))
+        // Only after the whole probe has been exhausted, so a transiently absent control socket is
+        // not mistaken for a permanent refusal.
+        assertTrue(rootHelper.contains("if (!configApplied && !acknowledged)"))
+        assertTrue(rootHelper.contains("if (groupOwnerIntentUnsupported) return"))
+        // A fresh advertisement cycle must be able to re-probe.
+        assertTrue(rootHelper.contains("groupOwnerIntentUnsupported = false"))
+        // The verdict is surfaced, so a dead end is visible rather than silent.
+        assertTrue(rootHelper.contains("out[\"groupOwnerIntentUnsupported\"]"))
+    }
+
+    @Test
+    fun logcatIsPlantedInEveryBuildBecauseTheWebBufferIsTooSmallToBeTheOnlyWitness() {
+        // With the debug tree behind BuildConfig.DEBUG a release build wrote to no log sink at
+        // all, and the in-memory buffer held only what it held. A Miracast failure that happens
+        // once during a connection attempt is unrecoverable, which is how the last debugging
+        // session ended up blind. logcat is the sink that survives.
+        assertTrue(appClass.contains("Timber.plant(WebLogBuffer.timberTree)"))
+        assertTrue(appClass.contains("Timber.plant(Timber.DebugTree())"))
+        assertFalse(appClass.contains("if (BuildConfig.DEBUG)"))
+        // Enough history to hold a whole failed attempt at the observed logging rate.
+        assertTrue(logBuffer.contains("MAX_ENTRIES = 2000"))
     }
 }

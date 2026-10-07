@@ -309,16 +309,32 @@ object WfdRootHelper {
             "%04x".format(maxThroughputMbps.coerceIn(0, 0xffff))
 
     internal fun parsePeerControlPort(output: String): Int? {
-        val hex = Regex("(?im)^wfd_subelems=([0-9a-f]+)\\s*$")
-            .find(output)?.groupValues?.getOrNull(1)?.lowercase() ?: return null
+        // Supplicants disagree on the reply shape. Stock hosts prefix the value with
+        // `wfd_subelems=`, while the Realtek port on this chipset answers with the bare hex
+        // string. The value is always the final whitespace-separated token on its line, so take
+        // that and drop the optional prefix rather than anchoring on one spelling.
+        val hex = output.lineSequence()
+            .mapNotNull { line ->
+                line.trim().split(Regex("\\s+")).lastOrNull()
+                    ?.removePrefix("wfd_subelems=")
+                    ?.takeIf { it.length >= 8 && it.all { c -> c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F' } }
+                    ?.lowercase()
+            }
+            .firstOrNull()
+            ?: return null
 
         var offset = 0
-        while (offset + 6 <= hex.length) {
+        while (offset + 4 <= hex.length) {
             val id = hex.substring(offset, offset + 2).toIntOrNull(16) ?: return null
-            val lenBytes = hex.substring(offset + 2, offset + 6).toIntOrNull(16) ?: return null
-            val payloadStart = offset + 6
+            // The length field is one byte, not two: a subelement is id, length, value. Reading
+            // two bytes would take the first value byte into the length, as in 0x063b here, and
+            // push the payload far past the end of the value so nothing ever parsed.
+            val lenBytes = hex.substring(offset + 2, offset + 4).toIntOrNull(16) ?: return null
+            val payloadStart = offset + 4
             val payloadEnd = payloadStart + lenBytes * 2
             if (payloadEnd > hex.length) return null
+            // Payload, matching [subelemHex]: WFD_DEVICE_INFO (2 bytes), then the RTSP control
+            // port (2 bytes), then the maximum throughput (2 bytes).
             if (id == 0 && lenBytes >= 6) {
                 val portHexStart = payloadStart + 4
                 val port = hex.substring(portHexStart, portHexStart + 4).toIntOrNull(16)
@@ -720,10 +736,20 @@ object WfdRootHelper {
         Timber.i("WFD: supplicant wifi config after patch: $flat")
 
         val patched = attempts.contains("PATCHED")
-        val presentAndCorrect = readback != null && Regex(
-            "^(?:$GO_INTENT_KEY_PATTERN)=\\s*$GO_OWNER_INTENT",
-            RegexOption.MULTILINE
-        ).containsMatchIn(readback)
+        // The intent value alone is not success: a live frequency restriction or a suppressed
+        // group interface still makes the intent unreachable, and calling this ALREADY_CURRENT
+        // would report a healthy sink that cannot become a Group Owner. Absent keys count as
+        // clear — only a non-blank value counts as set.
+        val config = readback.orEmpty()
+        val restrictionActive = Regex("^${NO_GO_FREQ_KEY}\\s*=\\s*[^\\s]", RegexOption.MULTILINE)
+            .containsMatchIn(config)
+        val groupIfaceSuppressed = Regex("^${NO_GROUP_IFACE_KEY}\\s*=\\s*[^\\s0]", RegexOption.MULTILINE)
+            .containsMatchIn(config)
+        val presentAndCorrect = readback != null && !restrictionActive && !groupIfaceSuppressed &&
+            Regex(
+                "^(?:$GO_INTENT_KEY_PATTERN)=\\s*$GO_OWNER_INTENT",
+                RegexOption.MULTILINE
+            ).containsMatchIn(readback)
 
         val result = when {
             patched -> GoIntentConfigResult.PATCHED

@@ -563,7 +563,12 @@ class WifiDirectManager(
 
     private fun rememberSourceDevice(device: WifiP2pDevice, reason: String) {
         val port = extractWfdControlPort(device)
-        Timber.i("Miracast peer: name=${device.deviceName} address=${device.deviceAddress} status=${device.status} controlPort=${port ?: "unknown"}")
+        val ip = device.ipAddress?.hostAddress
+        Timber.i(
+            "Miracast peer: name=${device.deviceName} address=${device.deviceAddress} status=${device.status} " +
+                "ip=${ip ?: "?"} controlPort=${port ?: "unknown"}"
+        )
+        if (!ip.isNullOrBlank()) WfdSourceHint.update(ipAddress = ip, reason = reason)
         if (port != null) WfdSourceHint.update(controlPort = port, reason = reason)
     }
 
@@ -744,9 +749,26 @@ class WifiDirectManager(
                         Timber.i("Miracast topology: Source is GO at $goIp; using exact RTSP endpoint")
                         WfdSourceHint.update(ipAddress = goIp, reason = "source-group-owner")
                     } else if (info.isGroupOwner) {
-                        Timber.i("Miracast topology: Sink is GO (standard Android Source-compatible); locating Source client RTSP endpoint")
+                        Timber.i("Miracast topology: Sink is GO; Source is our group client dialing RTSP on 7236")
                     }
-                    p2p.requestGroupInfo(ch) { group -> if (group != null) onGroupReady(group) }
+                    p2p.requestGroupInfo(ch) { group ->
+                        if (group == null) return@requestGroupInfo
+                        onGroupReady(group)
+                        if (group.isGroupOwner) {
+                            // We own the group, so the Source is one of our clients. Until RTSP
+                            // arrives the peer hint carries nothing, so take the address now — it
+                            // is what makes a failed dial diagnosable from the other side. The
+                            // connection-status filter is not available: WifiP2pStatus is hidden
+                            // framework, so a client with no address yet is simply skipped by
+                            // update() itself.
+                            group.clientList.forEach { client ->
+                                WfdSourceHint.update(
+                                    ipAddress = client.ipAddress?.hostAddress,
+                                    reason = "source-group-client"
+                                )
+                            }
+                        }
+                    }
                 } else {
                     WfdSourceHint.clear()
                     // A torn-down group will be formed again, so it must count as fresh a second time.

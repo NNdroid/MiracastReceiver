@@ -223,9 +223,23 @@ class XiaomiMiracastInteropSourceTest {
 
     @Test
     fun sinkKeepsToleratingASourceOwnedGroupAtTheRtspLayer() {
-        assertTrue(wifiDirect.contains("Sink is GO (standard Android Source-compatible)"))
+        assertTrue(wifiDirect.contains("Sink is GO"))
         assertTrue(wifiDirect.contains("Source is GO"))
     }
+
+    @Test
+    fun aSourceGroupClientIsRecordedWhenThisSinkOwnsTheGroup() {
+        // When this sink is the Group Owner the Source is one of our clients, and nothing connects
+        // out. The branch used to log an intention and then do nothing, leaving the peer hint
+        // empty until RTSP actually arrived — too late to explain a dial that never got there.
+        assertTrue(wifiDirect.contains("source-group-client"))
+        assertTrue(wifiDirect.contains("group.clientList"))
+        assertTrue(wifiDirect.contains("client.ipAddress?.hostAddress"))
+        // A discovered peer carries an IP whenever the framework gives us one.
+        assertTrue(wifiDirect.contains("device.ipAddress?.hostAddress"))
+        assertTrue(wifiDirect.contains("WfdSourceHint.update(ipAddress = ip"))
+    }
+
 
     @Test
     fun advertisementIsInjectedIntoTheP2pDeviceInterfaceAfterInitialize() {
@@ -286,6 +300,11 @@ class XiaomiMiracastInteropSourceTest {
         assertTrue(rootHelper.contains("MAGISK_POST_FS_DATA_OVERLAY"))
         assertTrue(rootHelper.contains("post-fs-data.d"))
         assertTrue(rootHelper.contains("fun installP2pOverlayBindMount"))
+        // A report of "intent already correct" must not be issued while a restriction is still
+        // live: the value on disk is right and the device still cannot become a Group Owner.
+        assertTrue(rootHelper.contains("restrictionActive"))
+        assertTrue(rootHelper.contains("groupIfaceSuppressed"))
+        assertTrue(rootHelper.contains("!restrictionActive && !groupIfaceSuppressed"))
         // The mount has to land before the wifi cycle that makes the new value take effect.
         assertTrue(rootHelper.contains("installP2pOverlayBindMount()"))
     }

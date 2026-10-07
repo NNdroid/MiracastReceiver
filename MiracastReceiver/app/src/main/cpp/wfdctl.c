@@ -159,7 +159,7 @@ int main(int argc, char *argv[])
         int res = ctrl_request(argv[i]);
         if (res == CTRL_REJECTED)
             rc = CTRL_REJECTED;
-        else if (rc == CTRL_OK)
+        else if (res == CTRL_NO_REPLY && rc == CTRL_OK)
             rc = CTRL_NO_REPLY; /* "sent, unconfirmed" downgrades an otherwise clean run */
     }
 

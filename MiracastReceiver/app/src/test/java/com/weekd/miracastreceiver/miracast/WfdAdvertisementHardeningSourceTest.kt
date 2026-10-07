@@ -38,6 +38,17 @@ class WfdAdvertisementHardeningSourceTest {
     }
 
     @Test
+    fun `native client run verdict is not downgraded by an acknowledged command`() {
+        // The loop compared the accumulator against CTRL_OK instead of the result of the current
+        // iteration, so the very first acknowledged command already flipped a clean run to
+        // "unconfirmed". With that in place every command in the log read as "never acknowledged"
+        // while the supplicant had accepted each one, and a real rejection was indistinguishable
+        // from a successful run.
+        assertTrue(native.contains("res == CTRL_NO_REPLY && rc == CTRL_OK"))
+        assertFalse(native.contains("else if (rc == CTRL_OK)"))
+    }
+
+    @Test
     fun `advertiser retries sockets and treats WFD IE as core requirement`() {
         assertTrue(helper.contains("candidates.map { socketPath ->"))
         assertTrue(helper.contains("WFD_SUBELEM_SET 0"))

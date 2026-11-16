@@ -2,6 +2,7 @@ plugins {
     id("com.android.application")
 }
 
+// Release signing is driven by environment variables so CI can sign without committing keys.
 val releaseStoreFile = System.getenv("ANDROID_SIGNING_STORE_FILE")
 val releaseStorePassword = System.getenv("ANDROID_SIGNING_STORE_PASSWORD")
 val releaseKeyAlias = System.getenv("ANDROID_SIGNING_KEY_ALIAS")
@@ -17,16 +18,30 @@ val googleCastAppId = providers.gradleProperty("googleCastAppId").orNull
     ?: System.getenv("GOOGLE_CAST_APP_ID").orEmpty()
 val escapedGoogleCastAppId = googleCastAppId.replace("\\", "\\\\").replace("\"", "\\\"")
 
+// ABIs to package: -PbuildArm64 / -PbuildArm32 produce a single ABI; default builds both (+ universal).
+val targetAbis = when {
+    project.hasProperty("buildArm64") -> listOf("arm64-v8a")
+    project.hasProperty("buildArm32") -> listOf("armeabi-v7a")
+    else -> listOf("arm64-v8a", "armeabi-v7a")
+}
+val buildUniversalApk = targetAbis.size > 1
+val useUxPlay = providers.gradleProperty("useUxPlay").isPresent
+if (useUxPlay) require(targetAbis.all { it in listOf("armeabi-v7a", "arm64-v8a") }) {
+    "UxPlay libraries are available for ARM32 and ARM64 only"
+}
+
 android {
-    namespace = "com.weekd.miracastreceiver"
+    namespace = "top.jast.miracastreceiver"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.weekd.miracastreceiver"
+        applicationId = "top.jast.miracastreceiver"
         minSdk = 23
         targetSdk = 36
         versionCode = 59
         versionName = "1.13.16"
+        buildConfigField("boolean", "USE_UXPLAY", useUxPlay.toString())
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "GOOGLE_CAST_APP_ID", "\"$escapedGoogleCastAppId\"")
         ndk { abiFilters += setOf("armeabi-v7a", "arm64-v8a") }
@@ -77,13 +92,15 @@ android {
         abi {
             isEnable = true
             reset()
-            val abiFilter = when {
-                project.hasProperty("buildArm64") -> listOf("arm64-v8a")
-                project.hasProperty("buildArm32") -> listOf("armeabi-v7a")
-                else -> listOf("arm64-v8a", "armeabi-v7a")
-            }
-            include(*abiFilter.toTypedArray())
-            isUniversalApk = !project.hasProperty("buildArm64") && !project.hasProperty("buildArm32")
+            include(*targetAbis.toTypedArray())
+            isUniversalApk = buildUniversalApk
+        }
+    }
+
+    // 应用内可切换界面语言，AAB 不能按语言拆包，否则切到设备没下载的语言会缺资源
+    bundle {
+        language {
+            enableSplit = false
         }
     }
 
@@ -92,19 +109,31 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    testOptions {
+        // Protocol tests construct ContextWrapper without calling Android services.
+        unitTests.isReturnDefaultValues = true
+    }
+
     buildFeatures {
         viewBinding = true
         buildConfig = true
     }
+    if (useUxPlay) sourceSets["main"].jniLibs.srcDir("src/uxplay/jniLibs")
 }
 
 dependencies {
+    // AndroidX Core
     implementation("androidx.core:core-ktx:1.19.1")
     implementation("androidx.appcompat:appcompat:1.8.0")
     implementation("com.google.android.material:material:1.14.0")
     implementation("androidx.constraintlayout:constraintlayout:2.2.2")
+
+    // Android TV Leanback
     implementation("androidx.leanback:leanback:1.2.0")
     implementation("androidx.tvprovider:tvprovider:1.1.0")
+
+    // Experimental Huawei Cast+ receiver. Source/provenance recorded next to the binary.
+    implementation(files("libs/HuaweiCastPlusEngine.jar"))
 
     val lifecycleVersion = "2.11.0"
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:$lifecycleVersion")
@@ -140,6 +169,8 @@ dependencies {
     // 16KB-page devices (Android 15+); stream-webrtc-android >= 1.3 supports them, keeping the
     // receiver WebRTC-capable through Android 17.
     implementation("io.getstream:stream-webrtc-android:1.3.10")
+
+    // Logging
     implementation("com.jakewharton.timber:timber:5.0.1")
     implementation("com.google.zxing:core:3.5.4")
     implementation("org.bouncycastle:bcprov-jdk18on:1.86")

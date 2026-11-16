@@ -8,6 +8,11 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="com.huawei.permission.HISIGHT_ACCESS" />
+    <uses-permission android:name="com.huawei.hms.kitframework.permission.BIND_ENGINE_FRAMEWORK_SERVICE" />
+    <uses-permission android:name="com.huawei.hms.kitframework.permission.REQUEST_AUTHENTICATION" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
@@ -24,6 +29,11 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <uses-feature android:name="android.software.leanback" android:required="true" />
 
+    <queries>
+        <package android:name="com.huawei.hms.kitframework" />
+        <package android:name="com.huawei.dmsdpdevice" />
+    </queries>
+
     <application
         android:name=".MiracastApp"
         android:allowBackup="true"
@@ -32,6 +42,7 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:localeConfig="@xml/locales_config"
+        android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.Leanback"
         android:usesCleartextTraffic="true"
@@ -47,7 +58,7 @@
 
         <meta-data
             android:name="com.google.android.gms.cast.tv.RECEIVER_OPTIONS_PROVIDER_CLASS_NAME"
-            android:value="com.weekd.miracastreceiver.cast.GoogleCastReceiverOptionsProvider" />
+            android:value="top.jast.miracastreceiver.cast.GoogleCastReceiverOptionsProvider" />
 
         <activity
             android:name=".ui.MainActivity"
@@ -93,9 +104,16 @@
             android:theme="@style/Theme.Leanback.Fullscreen" />
 
         <activity
+            android:name=".ui.CastPlusPlayerActivity"
+            android:exported="false"
+            android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize"
+            android:screenOrientation="sensorLandscape"
+            android:theme="@style/Theme.Leanback.Fullscreen" />
+
+        <!-- Translucent dialogs must not lock orientation: Android 8.0 rejects this in Activity.onCreate. -->
+        <activity
             android:name=".ui.ConnectActivity"
             android:exported="false"
-            android:screenOrientation="landscape"
             android:theme="@style/Theme.Leanback.Dialog" />
 
         <service
@@ -103,6 +121,14 @@
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="mediaPlayback|connectedDevice" />
+
+        <!-- 开机自启：把接收服务拉起来，不打开界面 -->
+        <service android:name="com.huawei.hisight.service.PlayerSinkService"
+            android:enabled="true" android:exported="false" />
+        <!-- This SDK service kills its own process in onDestroy. Never put it in the UI process. -->
+        <service android:name="com.huawei.connection.service.NearFieldManagerService"
+            android:enabled="true" android:exported="false" android:process=":castplus_nearby" />
+        <meta-data android:name="version" android:value="1" />
 
         <receiver
             android:name=".receiver.BootReceiver"

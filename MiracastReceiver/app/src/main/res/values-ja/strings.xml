@@ -115,7 +115,7 @@
     <string name="device_info">デバイス情報</string>
     <string name="connection_code">%s</string>
     <string name="connection_code_label">接続コード</string>
-    <string name="receiver_online">RECEIVER ONLINE</string>
+    <string name="receiver_online">レシーバーオンライン</string>
     <string name="work_mode">動作モード</string>
     <string name="always_ready_mode">常時バックグラウンド · いつでもキャスト</string>
     <string name="webui_quick_access">WEBUI クイックアクセス</string>
@@ -221,7 +221,7 @@
     <string name="error_network">ネットワークエラー</string>
     <string name="error_connection_failed">接続失敗</string>
     <string name="error_playback">再生エラー</string>
-    <string name="error_dlna_avc_decode">This TV could not decode the video. Try changing the video quality on the sending device and cast again.</string>
-    <string name="receiver_settings">Settings</string>
-    <string name="receiver_home_title">Casting receiver</string>
+    <string name="error_dlna_avc_decode">このテレビでは動画をデコードできませんでした。送信側の端末で画質を変更して、もう一度キャストしてください。</string>
+    <string name="receiver_settings">設定</string>
+    <string name="receiver_home_title">キャストレシーバー</string>
 </resources>

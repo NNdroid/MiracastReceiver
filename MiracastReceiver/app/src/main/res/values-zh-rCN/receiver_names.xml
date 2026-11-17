@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="receiver_name">TV name</string>
-    <string name="receiver_name_custom">Enter a custom name</string>
-    <string name="receiver_name_phone">Scan to rename with your phone</string>
-    <string name="receiver_name_system">Use system device name</string>
-    <string name="receiver_name_save">Save</string>
-    <string name="receiver_name_hint">Choose a room or enter a name (up to 48 UTF-8 bytes, about 16 Chinese characters). Used for AirPlay, DLNA and Google Cast. Root-enabled WFD devices also use this name for Wi-Fi Direct (32 UTF-8 bytes maximum; longer names are shortened).</string>
-    <string name="receiver_name_saved">Saved. Reopen the casting list to see the new name.</string>
-    <string name="receiver_name_invalid">Enter a nonempty name within 48 UTF-8 bytes, without control characters. If saving fails, try again.</string>
-    <string name="receiver_name_network">Unable to open phone setup. Connect the TV and phone to the same local network and try again.</string>
-    <string name="receiver_name_qr_hint">Connect your phone to the same local network, scan this code and open the page in a browser. This code expires after 10 minutes or when this dialog closes. You can also type the address below.</string>
+    <string name="receiver_name">电视名称</string>
+    <string name="receiver_name_custom">输入自定义名称</string>
+    <string name="receiver_name_phone">手机扫码命名</string>
+    <string name="receiver_name_system">恢复系统设备名称</string>
+    <string name="receiver_name_save">保存</string>
+    <string name="receiver_name_hint">选择房间或输入名称（最多 48 个 UTF-8 字节，约 16 个汉字）。用于 AirPlay、DLNA 和 Google Cast；通过 root 开启 WFD 的设备也会同步 Wi-Fi Direct 名称（最多 32 个 UTF-8 字节，超长截短）。</string>
+    <string name="receiver_name_saved">已保存，请重新打开投屏清单查看新名称。</string>
+    <string name="receiver_name_invalid">请输入非空名称，最多 48 个 UTF-8 字节，不可包含控制字符；保存失败时请重试。</string>
+    <string name="receiver_name_network">无法打开手机设置，请确认电视与手机连接同一局域网后重试。</string>
+    <string name="receiver_name_qr_hint">手机连接同一局域网，扫码后在浏览器打开页面，即可为本电视命名。二维码十分钟后或关闭此窗口后失效，也可手动输入下方地址。</string>
     <string-array name="receiver_name_presets">
         <item>Living Room TV</item>
         <item>Bedroom TV</item>

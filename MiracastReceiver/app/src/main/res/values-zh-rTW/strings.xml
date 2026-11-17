@@ -221,7 +221,7 @@
     <string name="error_network">網路錯誤</string>
     <string name="error_connection_failed">連線失敗</string>
     <string name="error_playback">播放錯誤</string>
-    <string name="error_dlna_avc_decode">This TV could not decode the video. Try changing the video quality on the sending device and cast again.</string>
-    <string name="receiver_settings">Settings</string>
-    <string name="receiver_home_title">Casting receiver</string>
+    <string name="error_dlna_avc_decode">此電視無法解碼此影片，請在傳送端切換畫質後重新投放。</string>
+    <string name="receiver_settings">設定</string>
+    <string name="receiver_home_title">投放接收設備</string>
 </resources>

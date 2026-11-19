@@ -230,6 +230,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** 供首页快捷操作调用：用遥控器从首页跳到设置页。 */
+    fun navigateToSettings() {
+        showDestination(Destination.SETTINGS, moveFocus = true)
+    }
+
     fun requestWifiDirectPermissions() {
         if (isFinishing || isDestroyed) return
         val missing = WIFI_DIRECT_PERMISSIONS.filter {

@@ -80,6 +80,38 @@
                 <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="10dp" android:orientation="horizontal"><TextView android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="WebUI" android:textColor="@color/text_secondary" android:textSize="15sp" /><TextView android:id="@+id/tv_home_webui" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textStyle="bold" /></LinearLayout>
             </LinearLayout>
 
+            <!-- 遥控器快捷操作：按方向键到达、OK 键触发，焦点落在按钮上有明显描边 -->
+            <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:orientation="horizontal">
+                <Button
+                    android:id="@+id/btn_home_rename"
+                    android:layout_width="0dp"
+                    android:layout_height="56dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_tv_action"
+                    android:focusable="true"
+                    android:nextFocusLeft="@id/nav_settings"
+                    android:nextFocusRight="@id/btn_home_settings"
+                    android:text="@string/device_name_setting"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_primary"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+                <Button
+                    android:id="@+id/btn_home_settings"
+                    android:layout_width="0dp"
+                    android:layout_height="56dp"
+                    android:layout_marginLeft="10dp"
+                    android:layout_weight="1"
+                    android:background="@drawable/bg_tv_action"
+                    android:focusable="true"
+                    android:nextFocusLeft="@id/btn_home_rename"
+                    android:text="@string/go_to_settings"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_primary"
+                    android:textSize="16sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
             <LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_marginTop="12dp" android:layout_weight="1" android:background="@drawable/bg_tv_panel" android:orientation="vertical" android:padding="20dp">
                 <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="@string/home_now_playing" android:textColor="@color/text_primary" android:textSize="19sp" android:textStyle="bold" />
                 <TextView android:id="@+id/tv_home_playback" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="12dp" android:textColor="@color/text_secondary" android:textSize="15sp" />

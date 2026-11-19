@@ -41,6 +41,11 @@ class ConnectActivity : AppCompatActivity() {
         val pin = findViewById<TextView>(R.id.tv_pairing_pin)
         allow.setOnClickListener { token?.let { receiver?.answer(it, true, remember.isChecked) } }
         deny.setOnClickListener { cancel(); finish() }
+        // 遥控器进入授权页时把初始焦点落到主操作（允许），方向键可在允许/拒绝间切换。
+        allow.post {
+            if (!isFinishing && !isDestroyed && allow.visibility == View.VISIBLE) allow.requestFocus()
+            else if (!isFinishing && !isDestroyed) deny.requestFocus()
+        }
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() { cancel(); finish() }
         })
@@ -52,6 +57,8 @@ class ConnectActivity : AppCompatActivity() {
                     info.text = getString(R.string.castplus_request, request.name)
                     allow.visibility = if (request.accepted) View.GONE else View.VISIBLE
                     remember.visibility = allow.visibility
+                    // 焦点不要停留在已隐藏的按钮上（同意后进入等待 PIN 状态）。
+                    if (allow.visibility == View.GONE && allow.isFocused) allow.clearFocus()
                     pin.text = if (request.accepted && request.pin.isNotEmpty())
                         getString(R.string.castplus_pin, request.pin) else if (request.accepted)
                         getString(R.string.castplus_connecting) else ""

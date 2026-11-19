@@ -571,8 +571,14 @@ class PlayerActivity : AppCompatActivity() {
         playerView.player = player
         playerView.setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
             findViewById<View?>(R.id.status_bar)?.visibility = visibility
+            val becameVisible = visibility == View.VISIBLE && !isControllerVisible
             isControllerVisible = visibility == View.VISIBLE
-            if (isControllerVisible) updateCompactPlaybackMeta()
+            if (isControllerVisible) {
+                updateCompactPlaybackMeta()
+                // 遥控器呼出控制条时把焦点落到播放/暂停，方向键即可在按钮间导航。
+                // 仅在从隐藏变可见时聚焦一次，避免打断已有焦点和 seek 预览。
+                if (becameVisible) focusPlayPauseForRemote()
+            }
         })
         playerView.setShowNextButton(true)
         playerView.setShowPreviousButton(true)
@@ -584,6 +590,24 @@ class PlayerActivity : AppCompatActivity() {
         playerView.findViewById<View?>(R.id.btn_rotate)?.setOnClickListener { rotateClockwise() }
         playerView.findViewById<View?>(R.id.exo_ffwd)?.setOnClickListener { handleSeekPress(forward = true) }
         playerView.findViewById<View?>(R.id.exo_rew)?.setOnClickListener { handleSeekPress(forward = false) }
+    }
+
+    /** 遥控器呼出控制条时把初始焦点放到播放/暂停（仅点播、有控制条的场景）。 */
+    private fun focusPlayPauseForRemote() {
+        if (usesRotateOverlay() || isFinishing || isDestroyed) return
+        playerView.post {
+            if (isFinishing || isDestroyed) return@post
+            val playPause = playerView.findViewById<View?>(R.id.exo_play_pause) ?: return@post
+            // 焦点已经在控制条按钮上时不抢，保留用户当前的左右导航位置。
+            val focused = currentFocus
+            val focusedId = focused?.id
+            val controllerButtonIds = setOf(
+                R.id.exo_prev, R.id.exo_rew, R.id.exo_play_pause, R.id.exo_ffwd,
+                R.id.exo_next, R.id.btn_rotate, R.id.btn_more, R.id.exo_progress
+            )
+            if (focusedId in controllerButtonIds) return@post
+            playPause.requestFocus()
+        }
     }
 
     /** 「更多」弹窗：控制条精简后，低频功能都收到这里。 */

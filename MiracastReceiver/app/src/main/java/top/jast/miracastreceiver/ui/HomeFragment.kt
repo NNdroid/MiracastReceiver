@@ -7,6 +7,7 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import top.jast.miracastreceiver.R
 import top.jast.miracastreceiver.discovery.DeviceInfoProvider
@@ -34,6 +35,9 @@ class HomeFragment : Fragment(), MainActivity.TvPage {
     private lateinit var tvMiracast: TextView
     private lateinit var tvWebUi: TextView
     private lateinit var tvPlayback: TextView
+    private lateinit var btnRename: View
+    private lateinit var btnSettings: View
+    private var deviceNameDialog: DeviceNameDialog? = null
     private var refreshJob: Job? = null
     private var lastSnapshot: DashboardSnapshot? = null
     private lateinit var deviceName: String
@@ -75,6 +79,32 @@ class HomeFragment : Fragment(), MainActivity.TvPage {
         tvPlayback = view.findViewById(R.id.tv_home_playback)
         tvDeviceName.text = deviceName
         tvConnectionCode.text = getString(R.string.connection_code, connectionCode)
+        bindRemoteActions(view)
+    }
+
+    /** 遥控器快捷操作：设备改名、跳转设置。按钮复用带焦点描边的 drawable，这里只接点击。 */
+    private fun bindRemoteActions(view: View) {
+        btnRename = view.findViewById(R.id.btn_home_rename)
+        btnSettings = view.findViewById(R.id.btn_home_settings)
+        btnRename.setOnClickListener {
+            val activity = requireActivity()
+            if (isAdded && activity is androidx.appcompat.app.AppCompatActivity) {
+                deviceNameDialog?.close()
+                deviceNameDialog = DeviceNameDialog(activity).also { it.show() }
+            }
+        }
+        btnSettings.setOnClickListener {
+            (activity as? MainActivity)?.navigateToSettings()
+        }
+    }
+
+    override fun requestInitialFocus() {
+        if (!::btnRename.isInitialized || view == null) return
+        btnRename.post {
+            if (isAdded && viewLifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) {
+                btnRename.requestFocus()
+            }
+        }
     }
 
     override fun onStart() {
@@ -95,6 +125,8 @@ class HomeFragment : Fragment(), MainActivity.TvPage {
     override fun onStop() {
         refreshJob?.cancel()
         refreshJob = null
+        deviceNameDialog?.close()
+        deviceNameDialog = null
         super.onStop()
     }
 

@@ -3,6 +3,9 @@
   极简两行控制条：进度行 + 传输控制行。
   画质/播放速度/字幕/旋转画面/视频信息都收进「更多」弹窗（btn_more），
   避免 OSD 在电视上占掉近一半屏幕高度。
+
+  遥控器适配：所有按钮使用带焦点描边的 bg_player_button_tv，点击区放大到 56dp，
+  并通过 nextFocusLeft/Right 串成横向焦点链、nextFocusUp 回到进度条。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -37,14 +40,16 @@
         <androidx.media3.ui.DefaultTimeBar
             android:id="@+id/exo_progress"
             android:layout_width="0dp"
-            android:layout_height="24dp"
+            android:layout_height="32dp"
             android:layout_weight="1"
-            app:played_color="@color/accent"
+            android:focusable="true"
+            android:nextFocusDown="@id/exo_play_pause"
             app:buffered_color="@color/text_secondary"
-            app:unplayed_color="#40FFFFFF"
+            app:played_color="@color/accent"
             app:scrubber_color="@color/accent"
+            app:scrubber_disabled_size="0dp"
             app:scrubber_enabled_size="14dp"
-            app:scrubber_disabled_size="0dp" />
+            app:unplayed_color="#40FFFFFF" />
 
         <TextView
             android:id="@+id/exo_duration"
@@ -58,93 +63,119 @@
             android:textStyle="bold" />
     </LinearLayout>
 
-    <!-- 传输控制 + 更多 -->
+    <!-- 传输控制 + 更多：遥控器焦点链 prev -> rew -> play/pause -> ffwd -> next -> rotate -> more -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_marginTop="2dp"
         android:gravity="center"
         android:orientation="horizontal">
 
-        <!-- 上一个 -->
         <ImageButton
             android:id="@+id/exo_prev"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
             android:layout_margin="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:background="@drawable/bg_player_button_tv"
             android:contentDescription="@string/cd_previous"
+            android:focusable="true"
+            android:nextFocusRight="@id/exo_rew"
+            android:nextFocusUp="@id/exo_progress"
+            android:padding="14dp"
             android:scaleType="fitCenter"
             android:src="@android:drawable/ic_menu_revert"
             android:tint="@color/text_primary" />
 
-        <!-- 后退 -->
         <ImageButton
             android:id="@+id/exo_rew"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
             android:layout_margin="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:background="@drawable/bg_player_button_tv"
             android:contentDescription="@string/cd_rewind"
+            android:focusable="true"
+            android:nextFocusLeft="@id/exo_prev"
+            android:nextFocusRight="@id/exo_play_pause"
+            android:nextFocusUp="@id/exo_progress"
+            android:padding="14dp"
             android:scaleType="fitCenter"
             android:src="@android:drawable/ic_media_rew"
             android:tint="@color/text_primary" />
 
-        <!-- 播放/暂停 -->
         <ImageButton
             android:id="@+id/exo_play_pause"
-            android:layout_width="52dp"
-            android:layout_height="52dp"
+            android:layout_width="64dp"
+            android:layout_height="64dp"
             android:layout_margin="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:background="@drawable/bg_player_button_tv"
             android:contentDescription="@string/cd_play_pause"
+            android:focusable="true"
+            android:nextFocusLeft="@id/exo_rew"
+            android:nextFocusRight="@id/exo_ffwd"
+            android:nextFocusUp="@id/exo_progress"
+            android:padding="16dp"
             android:scaleType="fitCenter"
             android:tint="@color/text_primary" />
 
-        <!-- 前进 -->
         <ImageButton
             android:id="@+id/exo_ffwd"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
             android:layout_margin="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:background="@drawable/bg_player_button_tv"
             android:contentDescription="@string/cd_fast_forward"
+            android:focusable="true"
+            android:nextFocusLeft="@id/exo_play_pause"
+            android:nextFocusRight="@id/exo_next"
+            android:nextFocusUp="@id/exo_progress"
+            android:padding="14dp"
             android:scaleType="fitCenter"
             android:src="@android:drawable/ic_media_ff"
             android:tint="@color/text_primary" />
 
-        <!-- 下一个 -->
         <ImageButton
             android:id="@+id/exo_next"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
             android:layout_margin="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:background="@drawable/bg_player_button_tv"
             android:contentDescription="@string/cd_next"
+            android:focusable="true"
+            android:nextFocusLeft="@id/exo_ffwd"
+            android:nextFocusRight="@id/btn_rotate"
+            android:nextFocusUp="@id/exo_progress"
+            android:padding="14dp"
             android:scaleType="fitCenter"
             android:src="@android:drawable/ic_menu_revert"
             android:tint="@color/text_primary" />
 
-        <!-- 旋转画面：每按一次顺时针转 90° -->
         <ImageButton
             android:id="@+id/btn_rotate"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
             android:layout_margin="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:background="@drawable/bg_player_button_tv"
             android:contentDescription="@string/cd_rotate_screen"
-            android:padding="6dp"
+            android:focusable="true"
+            android:nextFocusLeft="@id/exo_next"
+            android:nextFocusRight="@id/btn_more"
+            android:nextFocusUp="@id/exo_progress"
+            android:padding="14dp"
             android:scaleType="fitCenter"
             android:src="@drawable/ic_rotate"
             android:tint="@color/text_primary" />
 
-        <!-- 更多：画质 / 速度 / 字幕 / 旋转 / 视频信息 -->
         <ImageButton
             android:id="@+id/btn_more"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
             android:layout_margin="4dp"
-            android:background="?attr/selectableItemBackgroundBorderless"
+            android:background="@drawable/bg_player_button_tv"
             android:contentDescription="@string/more"
+            android:focusable="true"
+            android:nextFocusLeft="@id/btn_rotate"
+            android:nextFocusUp="@id/exo_progress"
+            android:padding="14dp"
             android:scaleType="fitCenter"
             android:src="@android:drawable/ic_menu_more"
             android:tint="@color/text_primary" />

@@ -52,6 +52,11 @@
                 android:layout_height="wrap_content"
                 android:minHeight="48dp"
                 android:layout_marginTop="12dp"
+                android:background="@drawable/bg_setting_item"
+                android:focusable="true"
+                android:nextFocusDown="@id/btn_allow"
+                android:paddingLeft="12dp"
+                android:paddingRight="12dp"
                 android:text="@string/remember_device"
                 android:textColor="@color/text_secondary"
                 android:textSize="@dimen/connect_body_size" />
@@ -68,7 +73,13 @@
                     android:layout_weight="1"
                     android:minHeight="48dp"
                     android:layout_marginEnd="4dp"
+                    android:background="@drawable/bg_tv_action"
+                    android:focusable="true"
+                    android:nextFocusRight="@id/btn_allow"
+                    android:nextFocusUp="@id/cb_remember_device"
                     android:text="@string/deny"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_primary"
                     android:textSize="@dimen/connect_button_size" />
                 <Button
                     android:id="@+id/btn_allow"
@@ -77,7 +88,13 @@
                     android:layout_weight="1"
                     android:minHeight="48dp"
                     android:layout_marginStart="4dp"
+                    android:background="@drawable/bg_tv_action"
+                    android:focusable="true"
+                    android:nextFocusLeft="@id/btn_deny"
+                    android:nextFocusUp="@id/cb_remember_device"
                     android:text="@string/allow"
+                    android:textAllCaps="false"
+                    android:textColor="@color/text_primary"
                     android:textSize="@dimen/connect_button_size" />
             </LinearLayout>
         </LinearLayout>

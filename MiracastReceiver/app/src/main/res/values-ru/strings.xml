@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="auto_rotate_to_fit">Автоповорот под экран</string>
+    <string name="notification_stop_cast">Остановить трансляцию</string>
+    <!-- 首页 -->
+    <string name="waiting_connection">Ожидание подключения трансляции…</string>
+    <string name="device_ip">IP устройства: %s</string>
+    <string name="device_ip_fetching">Определение…</string>
+    <string name="how_to_connect">Как подключиться</string>
+    <string name="connect_instruction">1. Убедитесь, что передающее устройство и телевизор находятся в одной локальной сети\n2. Откройте приложение для трансляции на передающем устройстве\n3. Найдите и выберите это устройство\n4. Начните трансляцию</string>
+    <string name="auto_start_on_boot">Запускать приёмник при включении</string>
+    <string name="auto_start_on_boot_hint">После включения телевизора работает в фоне, открывать приложение не нужно. На некоторых телевизорах нужно разрешить автозапуск этого приложения в системных настройках.</string>
+    <string name="return_to_app_after_cast">Возвращаться в приложение после трансляции</string>
+    <string name="return_to_app_after_cast_hint">После остановки трансляции остаётся на этом экране настроек, а не возвращается на главный экран телевизора. Удобно, если нужно сразу изменить настройки.</string>
+    <string name="language">Язык</string>
+    <string name="language_follow_system">Как в системе</string>
+    <string name="status_no_network">Нет подключения к сети</string>
+    <string name="status_no_wifi">Нет подключения к Wi-Fi</string>
+    <string name="status_service_starting">Запуск службы…</string>
+    <string name="status_permission_denied">Разрешение на доступ к местоположению не предоставлено, беспроводная трансляция с Windows недоступна</string>
+
+    <!-- 悬浮窗权限 -->
+    <string name="overlay_permission_title">Требуется разрешение «Поверх других приложений»</string>
+    <string name="overlay_permission_message">Когда приложение не открыто (например, после автозапуска при включении или возврата на главный экран), система не даёт экрану трансляции появиться, и кажется, что трансляция не работает.\n\nВключите это разрешение для приложения на следующей странице настроек.</string>
+    <string name="overlay_permission_open">Открыть настройки</string>
+    <string name="overlay_permission_later">Позже</string>
+    <string name="overlay_settings_missing">На этом устройстве нет такой страницы настроек. Выполните через adb: appops set %s SYSTEM_ALERT_WINDOW allow</string>
+
+    <!-- 连接确认 -->
+    <string name="connect_request">Запрос на трансляцию</string>
+    <string name="allow">Разрешить</string>
+    <string name="deny">Отклонить</string>
+    <string name="remember_device">Запомнить это устройство</string>
+
+    <!-- 播放页面 -->
+    <string name="connected">Подключено</string>
+    <string name="playing">Воспроизведение</string>
+    <string name="status_paused">Пауза</string>
+    <string name="status_buffering">Буферизация…</string>
+    <string name="status_finished">Воспроизведение завершено</string>
+    <string name="status_playback_error">Ошибка воспроизведения</string>
+    <string name="error_playback_detail">Ошибка воспроизведения: %s</string>
+    <string name="error_unknown">Неизвестная ошибка</string>
+    <string name="status_speed">Скорость воспроизведения: %s</string>
+    <string name="status_quality">Качество: %s</string>
+    <string name="title_dlna">Трансляция DLNA</string>
+    <string name="title_dlna_indexed">Трансляция DLNA %1$d/%2$d</string>
+    <string name="title_iphone_mirror">Повтор экрана iPhone</string>
+    <string name="title_windows_display">Беспроводной дисплей Windows</string>
+    <string name="status_waiting_airplay">Ожидание изображения AirPlay…</string>
+    <string name="status_waiting_windows">Ожидание изображения Windows…</string>
+    <string name="status_receiving_iphone">Приём экрана iPhone…</string>
+    <string name="status_receiving_windows">Приём экрана Windows…</string>
+    <string name="status_showing_image">Показ изображения</string>
+    <string name="status_image_error">Ошибка загрузки изображения</string>
+    <string name="error_image_detail">Ошибка загрузки изображения: %s</string>
+    <string name="error_image_decode">Не удалось загрузить изображение</string>
+    <string name="status_slideshow_paused">Слайд-шоу приостановлено</string>
+
+    <!-- 「更多」菜单 -->
+    <string name="more">Ещё</string>
+    <string name="menu_stream_info">Сведения о видео</string>
+    <string name="menu_stream_info_hide">Скрыть сведения о видео</string>
+    <string name="menu_quality">Качество</string>
+    <string name="menu_speed">Скорость воспроизведения (%s)</string>
+    <string name="menu_subtitles">Субтитры</string>
+    <string name="subtitles_auto">Субтитры переключаются автоматически по дорожкам субтитров медиафайла</string>
+    <string name="quality_title">Выбор качества</string>
+    <string name="quality_auto">Авто</string>
+    <string name="quality_480">Стандарт 480p</string>
+    <string name="quality_720">HD 720p</string>
+    <string name="quality_1080">Full HD 1080p</string>
+    <string name="quality_original">Оригинал</string>
+    <string name="speed_title">Скорость воспроизведения</string>
+
+    <!-- 视频信息面板 -->
+    <string name="info_title">Сведения о видео</string>
+    <string name="info_source_resolution">Исходное разрешение</string>
+    <string name="info_display_resolution">Разрешение показа</string>
+    <string name="info_codec">Видеокодек</string>
+    <string name="info_frame_rate">Частота кадров</string>
+    <string name="info_bitrate">Битрейт</string>
+    <string name="info_network_speed">Скорость сети</string>
+
+    <!-- 控制条无障碍描述 -->
+    <string name="cd_cast_image">Транслируемое изображение</string>
+    <string name="cd_rotate_screen">Повернуть экран</string>
+    <string name="cd_previous">Предыдущий</string>
+    <string name="cd_rewind">Перемотка назад</string>
+    <string name="cd_play_pause">Воспроизведение/пауза</string>
+    <string name="cd_fast_forward">Перемотка вперёд</string>
+    <string name="cd_next">Следующий</string>
+
+    <!-- 前台服务通知 -->
+    <string name="notification_channel_name">Служба приёма трансляций</string>
+    <string name="notification_channel_description">Поддерживает работу службы приёма трансляций</string>
+    <string name="notification_waiting">Ожидание подключений AirPlay / DLNA / Miracast</string>
+
+    <!-- Receiver status and AirPlay controls -->
+    <string name="status_waiting_network">Ожидание сетевого адреса. Проверьте подключение.</string>
+    <string name="status_receiver_running">Служба приёма работает. Ожидание подключения.</string>
+    <string name="status_receiver_stopped">Служба приёма остановлена. Откройте приложение заново.</string>
+    <string name="status_miracast_checking">Проверка трансляции экрана Windows / Android…</string>
+    <string name="status_miracast_advertising">Обнаружение Miracast настроено. В Windows нажмите Win+K, в Android откройте беспроводной дисплей. Обнаружение также зависит от драйвера.</string>
+    <string name="status_miracast_system">Беспроводной дисплей системы включён. Если устройства нет в Win+K, откройте системный приёмник трансляции и повторите попытку. Этот переключатель сам по себе не подтверждает поддержку приёма.</string>
+    <string name="status_miracast_root_required">Трансляция Windows / Android недоступна: нет root-доступа. Сначала включите системный приёмник, если он есть; иначе для обнаружения нужен root. AirPlay, DLNA и VLC Cast остаются доступны.</string>
+    <string name="status_miracast_failed">Не удалось настроить трансляцию Windows / Android. Проверьте системную трансляцию, Wi-Fi Direct и root-доступ, затем откройте приложение заново. При повторном сбое приложите журналы ADB. Другие способы трансляции доступны.</string>
+    <string name="status_miracast_unsupported">На устройстве нет Wi-Fi Direct, необходимого для трансляции Windows / Android. Используйте AirPlay, DLNA или VLC Cast.</string>
+    <string name="status_miracast_permission">Для трансляции Windows / Android нужно разрешение на устройства поблизости или местоположение. Предоставьте его в настройках и откройте приложение заново.</string>
+    <string name="status_miracast_wifi_disabled">Для трансляции Windows / Android нужен Wi-Fi Direct. Включите Wi-Fi и откройте приложение заново; одного Ethernet недостаточно.</string>
+    <string name="castplus_enable">Приёмник Huawei Cast+ (экспериментальный)</string>
+    <string name="castplus_off">Cast+ выключен. Включите его для проверки беспроводной проекции с телефона Huawei.</string>
+    <string name="castplus_unsupported">Для Cast+ нужны Android 6 или новее и устройство ARM.</string>
+    <string name="castplus_permission">Cast+ нужно разрешение на местоположение, а на Android 13 и новее — также на устройства поблизости. Предоставьте их и откройте приложение заново.</string>
+    <string name="castplus_starting">Запуск приёмника Cast+…</string>
+    <string name="castplus_ready">Приёмник Cast+ готов. Откройте беспроводную проекцию на телефоне Huawei.</string>
+    <string name="castplus_pairing">Cast+ ожидает подтверждения подключения или PIN-кода.</string>
+    <string name="castplus_connecting">Подключение к телефону Huawei…</string>
+    <string name="castplus_playing">Huawei Cast+ показывает экран телефона.</string>
+    <string name="castplus_paused">Huawei Cast+ приостановлен.</string>
+    <string name="castplus_disconnecting">Отключение Huawei Cast+…</string>
+    <string name="castplus_error">Не удалось запустить Cast+ или установить соединение. Выключите и включите Cast+; если сбой повторится, приложите журналы ADB приёмника.</string>
+    <string name="castplus_request">%1$s запрашивает подключение через Huawei Cast+.</string>
+    <string name="castplus_pin">Введите этот PIN-код на телефоне: %1$s</string>
+    <string name="castplus_exit">Остановить трансляцию</string>
+    <string name="receiver_default_name">Телевизор в гостиной</string>
+    <string name="subtitles_follow_sender">Выберите субтитры на передающем устройстве.</string>
+</resources>

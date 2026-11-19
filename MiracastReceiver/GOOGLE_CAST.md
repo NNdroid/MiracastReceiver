@@ -16,7 +16,7 @@ In the Google Cast SDK Developer Console:
 2. Enable Android TV / Cast Connect support.
 3. Associate package name:
 
-   `com.weekd.miracastreceiver`
+   `top.jast.miracastreceiver`
 
 4. Note the Cast App ID.
 5. For sideload testing, register the TV's **Cast software serial number** as a developer device and reboot the TV after registration.

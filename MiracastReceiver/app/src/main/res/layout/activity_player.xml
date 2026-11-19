@@ -38,6 +38,29 @@
         android:keepScreenOn="true"
         android:visibility="gone" />
 
+    <!-- 镜像画面旋转层：旋转角度不为 0 时才显示，解码器改往这块 TextureView 送帧（SurfaceView 不支持旋转内容）。
+         黑底盖住下面的 SurfaceView；0° 时隐藏，继续走 SurfaceView 的硬件视频层，电视 4K 性能不受影响。 -->
+    <FrameLayout
+        android:id="@+id/mirror_rotate_layer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#000000"
+        android:visibility="gone">
+
+        <TextureView
+            android:id="@+id/mirror_rotate_texture"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+    </FrameLayout>
+
+    <!-- Subtitles decoded by the external AirPlay HLS player need their own overlay. -->
+    <androidx.media3.ui.SubtitleView
+        android:id="@+id/airplay_subtitles"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:visibility="gone" />
+
+    <!-- 图片轮播视图 -->
     <ImageView
         android:id="@+id/image_view"
         android:layout_width="match_parent"
@@ -138,6 +161,9 @@
         android:textColor="@color/player_text_primary"
         android:textSize="15sp"
         android:visibility="gone" />
+
+    <!-- 手动旋转浮动按钮：镜像/Miracast/图片模式用（没有控制条）。点屏幕或按遥控器 OK/上下键呼出，几秒后自动隐藏 -->
+    <include layout="@layout/rotate_overlay_button" />
 
     <LinearLayout
         android:id="@+id/loading_panel"
